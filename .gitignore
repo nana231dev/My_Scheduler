@@ -1,0 +1,27 @@
+# ── 데이터 / 개인정보 (버전 관리 제외) ──
+config.json
+*.db
+*.db-journal
+data/images/
+backup/
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# ── 로그 / 임시 ──
+Temp/
+archive/logs/
+*.log
+
+# ── 중첩 저장소 방지 (GitHub Desktop 등이 실수로 하위 My_Scheduler/.git 생성 시 무시) ──
+My_Scheduler/
+
+# ── 빌드 ──
+build/
+dist/
+*.spec

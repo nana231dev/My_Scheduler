@@ -1,0 +1,6 @@
+# My Scheduler 실행에 필요한 외부 라이브러리
+# 설치: pip install -r requirements.txt
+ttkbootstrap>=1.10.1
+pandas>=2.0.0
+openpyxl>=3.1.0          # pandas 엑셀(.xlsx) 입출력 엔진
+korean-lunar-calendar>=0.3.2
