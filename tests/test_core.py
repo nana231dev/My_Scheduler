@@ -262,6 +262,73 @@ class TestLedger(unittest.TestCase):
         self.assertEqual(s["savings"], 950000)
 
 
+# ── 일정 엑셀 왕복 (2026-09-18 Day 1: P0-3 회귀 테스트) ─────────
+class TestScheduleExcelRoundTrip(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = DBManager(db_name=str(Path(self._tmp.name) / "excel.db"))
+
+    def tearDown(self):
+        try:
+            self.db.conn.close()
+        except Exception:
+            pass
+        self._tmp.cleanup()
+
+    def _sample_df(self):
+        pd = pytest_pd()
+        return pd.DataFrame([
+            {"날짜": "2099-03-01", "일정": "회의", "저널": "메모1", "이미지": ""},
+            {"날짜": "2099-03-02", "일정": "휴가", "저널": "", "이미지": ""},
+        ])
+
+    def test_export_columns_korean(self):
+        self.db.set_schedule("2099-03-01", "회의", "메모1")
+        df = self.db.get_all_schedules_with_images_df()
+        self.assertIsNotNone(df)
+        self.assertEqual(list(df.columns), ["날짜", "일정", "저널", "이미지"])
+
+    def test_import_export_roundtrip(self):
+        df = self._sample_df()
+        res = self.db.import_schedules_from_df(df)
+        self.assertEqual(res, {"imported": 2, "skipped": 0})
+        back = self.db.get_all_schedules_with_images_df()
+        self.assertEqual(len(back), 2)
+        self.assertEqual(set(back["날짜"].tolist()), {"2099-03-01", "2099-03-02"})
+
+    def test_import_legacy_bigo_header(self):
+        pd = pytest_pd()
+        legacy = pd.DataFrame([{"날짜": "2099-03-03", "일정": "출장", "비고": "구버전"}])
+        res = self.db.import_schedules_from_df(legacy)
+        self.assertEqual(res, {"imported": 1, "skipped": 0})
+        got = self.db.get_schedule("2099-03-03")
+        self.assertEqual(got["journal"], "구버전")
+
+    def test_import_skips_blank_date(self):
+        pd = pytest_pd()
+        df = pd.DataFrame([
+            {"날짜": "", "일정": "무효", "저널": "", "이미지": ""},
+            {"날짜": "2099-03-04", "일정": "유효", "저널": "", "이미지": ""},
+        ])
+        res = self.db.import_schedules_from_df(df)
+        self.assertEqual(res, {"imported": 1, "skipped": 1})
+
+    def test_seed_strings_not_mojibake(self):
+        self.db.check_default_categories()
+        names = [r["name"] for r in self.db.get_categories()]
+        self.assertIn("기타", names)
+        anns = {a["name"] for a in self.db.get_anniversaries()}
+        self.assertIn("추석", anns)
+        self.assertTrue(self.db.add_saved_stock("005930", "삼성전자", 75000))
+        row = self.db.get_saved_stocks()[0]
+        self.assertEqual(row["category"], "주식")
+
+
+def pytest_pd():
+    import pandas as pd
+    return pd
+
+
 # ── 증권 저장목록 (2026-09-14 확장) ──────────────────────────
 class TestSavedStocks(unittest.TestCase):
     def setUp(self):

@@ -1,7 +1,7 @@
 ﻿# -*- coding: utf-8 -*-
-"""SQLite 데이터?곕쿋?댁뒪 愿由?紐⑤뱢 (2026-09-04 踰꾩쟾 ?듯빀 ??core ?⑦궎吏濡?異붿텧)
+"""SQLite 데이터베이스 관리 모듈 (2026-09-04 버전을 core 패키지로 추출)"
 
-10yp_2.py??DBManager瑜?洹몃?濡??닿?. 理쒖떊 목록留?
+10yp_2.py의 DBManager를 그대로 이관. 최신 테이블 목록:
 - schedules(date PK, schedule, journal)
 - anniversaries(id, name, year, month, day, type, is_holiday, is_repeat)
 - tasks(id, item, period, goal, content, remark)
@@ -53,7 +53,7 @@ class DBManager:
             )
                 ''')
 
-        # ?? 利앷텒 ????μ슜 ?뚯씠釉?(Market tab ??μ슜) ?????????????????????
+        # --- 저장 종목 전용 테이블(Market tab 사용) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS saved_markets (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -76,7 +76,7 @@ class DBManager:
             )
         ''')
 
-        # --- 怨듬? ??(2026-09-04 異붽?) ---
+        # --- 카테고리(2026-09-04 추가) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -113,7 +113,7 @@ class DBManager:
             )
         ''')
 
-        # --- 목록??DB (2026-09-05 異붽?) ---
+        # --- 단어장 DB (2026-09-05 추가) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS wordbook (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -130,7 +130,7 @@ class DBManager:
             )
         ''')
 
-        # --- 생활용어?⑹뼱 DB (2026-09-06 異붽?) ---
+        # --- 생활용어 DB (2026-09-06 추가) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS phrases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -143,7 +143,7 @@ class DBManager:
             )
         ''')
 
-        # --- ??ν븳 ?댁뒪 DB (2026-09-06 異붽?) ---
+        # --- 저장 뉴스 DB (2026-09-06 추가) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS saved_news (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -157,7 +157,7 @@ class DBManager:
             )
         ''')
 
-        # --- 利먭꺼李얘린 紐낆뼵/怨좎궗?깆뼱/?쒖옄 DB (2026-09-12 異붽?) ---
+        # --- 즐겨찾기 명언/고사성어/시조 DB (2026-09-12 추가) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS favorite_quotes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -170,7 +170,7 @@ class DBManager:
             )
         ''')
 
-        # --- 媛怨꾨? DB (2026-09-12 異붽?) ---
+        # --- 가계부 DB (2026-09-12 추가) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -183,7 +183,7 @@ class DBManager:
             )
         ''')
 
-        # --- 怨쇳븰/IT/?ы쉶?먭뎄 硫붾え DB (2026-09-12 異붽?) ---
+        # --- 과학/IT/사회탐구 메모 DB (2026-09-12 추가) ---
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS study_subject_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -214,13 +214,13 @@ class DBManager:
         self.conn.commit()
 
     def check_default_categories(self):
-        """怨듬? 怨쇰ぉ 湲곕낯媛?(단어장, 카테고리, 湲고?) ?먮룞 ?앹꽦"""
+        """기본 카테고리(단어장, 카테고리, 기타) 자동 생성"""
         cursor = self.conn.cursor()
         cursor.execute("SELECT count(*) FROM categories")
         if cursor.fetchone()[0] == 0:
             cursor.executemany(
                 "INSERT INTO categories (name) VALUES (?)",
-                [("단어장",), ("카테고리",), ("湲고?",)]
+                [("단어장",), ("카테고리",), ("기타",)]
             )
             self.conn.commit()
 
@@ -237,9 +237,9 @@ class DBManager:
                 ("개척절", 0, 10, 3, 0, 1, 1),
                 ("서방", 0, 10, 9, 0, 1, 1),
                 ("크리스마스", 0, 12, 25, 0, 1, 1),
-                ("?ㅻ궇", 0, 1, 1, 1, 1, 1),
+                ("설날", 0, 1, 1, 1, 1, 1),
                 ("근화절", 0, 10, 26, 0, 1, 1),
-                ("異붿꽍", 0, 8, 15, 1, 1, 1)
+                ("추석", 0, 8, 15, 1, 1, 1)
             ]
             cursor.executemany("INSERT INTO anniversaries (name, year, month, day, type, is_holiday, is_repeat) VALUES (?,?,?,?,?,?,?)", defaults)
             self.conn.commit()
@@ -253,7 +253,7 @@ class DBManager:
             for r in cursor.fetchall()
         ]
 
-    # --- ?쇱젙 ---
+    # --- 일정 ---
     def get_schedule(self, date_str):
         cursor = self.conn.cursor()
         cursor.execute("SELECT schedule, journal FROM schedules WHERE date=?", (str(date_str),))
@@ -268,7 +268,7 @@ class DBManager:
 
     def set_schedule(self, date_str, schedule, journal):
         cursor = self.conn.cursor()
-        # ?댁슜???놁쑝硫??삭제 (?? ?묒? import?쒖뿉??鍮??댁슜?대씪????뼱?곌린 ?꾪빐 濡쒖쭅 議곗젙 媛?ν븯?? ?ш린???좎?)
+        # 내용이 없으면 삭제 (가져오기 시 빈 내용 처리는 이곳에서 조정)
         if not str(schedule).strip() and not str(journal).strip():
             self.delete_schedule(date_str)
             return
@@ -346,7 +346,7 @@ class DBManager:
         self.conn.commit()
 
     def get_schedule_images(self, date_str):
-        """?쇨컙 ?쇱???泥⑤???洹몃┝?뚯씪 ?곷?寃쎈줈 紐⑸줉??諛섑솚?쒕떎."""
+        """해당 날짜 일정의 그림파일 경로 목록을 반환한다."""
         row = self.conn.execute("SELECT schedule_images FROM schedules WHERE date=?", (str(date_str),)).fetchone()
         if not row or not row[0]:
             return []
@@ -372,7 +372,7 @@ class DBManager:
         self.conn.commit()
 
     def save_diary_image(self, date_str, src_path):
-        """洹몃┝?뚯씪??data/images ?꾨옒???좎쭨蹂꾨줈 蹂듭궗?섍퀬 ?곷?寃쎈줈瑜?諛섑솚?쒕떎."""
+        """그림파일을 data/images 아래 날짜별로 복사하고 상대경로를 반환한다."""
         import shutil
         from pathlib import Path
         images_dir = Path("data/images").resolve()
@@ -431,12 +431,12 @@ class DBManager:
         except sqlite3.Error: return None
 
     def get_all_schedules_with_images_df(self):
-        """항목吏 ?뺣낫瑜??ы븿???꾩껜 ?쇱젙 DataFrame 諛섑솚 (?묒? ?대낫?닿린??"""
+        """이미지 정보를 포함한 전체 일정 DataFrame 반환(가져오기 호환용)"""
         try:
             query = "SELECT date, schedule, journal, schedule_images FROM schedules ORDER BY date"
             df = pd.read_sql_query(query, self.conn)
-            df.columns = ["?좎쭨", "?쇱젙", "鍮꾧퀬", "항목吏"]
-            # 항목吏 JSON???쎄린 ?ъ슫 臾몄옄?대줈 蹂??
+            df.columns = ["날짜", "일정", "저널", "이미지"]
+            # 이미지 JSON을 세미콜론 문자로 변환
             def format_images(img_json):
                 try:
                     imgs = json.loads(img_json) if img_json else []
@@ -445,26 +445,36 @@ class DBManager:
                     return ""
                 except (ValueError, TypeError):
                     return ""
-            df["항목吏"] = df["항목吏"].apply(format_images)
+            df["이미지"] = df["이미지"].apply(format_images)
             return df
         except sqlite3.Error: return None
 
-    # [異붽?] 문화먯꽌 ?쎌? ?쇱젙 DataFrame??DB??諛섏쁺
+    # [추가] 외부 파일에서 가져오기한 일정 DataFrame을 DB에 반영
     def import_schedules_from_df(self, df):
-        # df 而щ읆: "?좎쭨", "?쇱젙", "鍮꾧퀬"
-        # NaN 媛믪쓣 鍮?臾몄옄?대줈 蹂??
+        """날짜(필수), 일정, 저널, 이미지(선택) 컬럼을 읽어 일정을 병합한다."""
+        # 구버전 파일 호환: '비고' 헤더를 '저널'로 취급
+        if "저널" not in df.columns and "비고" in df.columns:
+            df = df.rename(columns={"비고": "저널"})
         df = df.fillna("")
+        imported, skipped = 0, 0
         for _, row in df.iterrows():
             try:
-                # ?묒? ?좎쭨 ?뺤떇??datetime??寃쎌슦 臾몄옄?대줈 蹂??
-                d_val = row['?좎쭨']
+                d_val = row["날짜"]
                 if isinstance(d_val, datetime):
                     d_val = d_val.strftime("%Y-%m-%d")
-
-                self.set_schedule(str(d_val), str(row['?쇱젙']), str(row['鍮꾧퀬']))
-            except (KeyError, ValueError, TypeError, sqlite3.Error) as e:
-                log.warning("Import Error on row %s: %s", _, e)
+                date_str = str(d_val).strip()
+                if not date_str:
+                    skipped += 1
+                    continue
+                schedule = str(row.get("일정", "") or "")
+                journal = str(row.get("저널", "") or "")
+                self.set_schedule(date_str, schedule, journal)
+                imported += 1
+            except (KeyError, ValueError, TypeError, AttributeError, sqlite3.Error) as e:
+                skipped += 1
+                log.warning("Import skipped row %s: %s", _, e)
         self.conn.commit()
+        return {"imported": imported, "skipped": skipped}
 
     def add_anniversary(self, name, year, month, day, type_val, is_holiday_val, is_repeat_val):
         cursor = self.conn.cursor()
@@ -529,7 +539,7 @@ class DBManager:
         cursor.execute("DELETE FROM ddays WHERE id=?", (dday_id,))
         self.conn.commit()
 
-    # --- 怨듬? ??(2026-09-04) ---
+    # --- 카테고리(2026-09-04) ---
     def get_categories(self):
         cursor = self.conn.cursor()
         cursor.execute("SELECT id, name FROM categories ORDER BY id")
@@ -645,7 +655,7 @@ class DBManager:
 
     # --- 목록??DB (2026-09-05) ---
     def init_default_words(self):
-        """?몄뼱蹂?湲곕낯 목록媛 ?놁쑝硫?word_data.py?먯꽌 ?먮룞 ?쎌엯 (단어장 300 쨌 ?쇰낯??以묎뎅??媛?20)"""
+        """언어별 기본 목록이 없으면 word_data.py에서 자동 삽입(단어장 300, 일본어/중국어 각 20)"""
         try:
             from core.word_data import LANG_WORDS
         except ImportError:
@@ -723,7 +733,7 @@ class DBManager:
 
     # --- 생활용어?⑹뼱 DB (2026-09-06) ---
     def init_default_phrases(self):
-        """?몄뼱蹂?湲곕낯 생활용어?⑹뼱媛 ?놁쑝硫?phrase_data.py?먯꽌 ?먮룞 ?쎌엯 (단어장 300 쨌 ?쇰낯??以묎뎅??媛?20)"""
+        """언어별 기본 생활용어가 없으면 phrase_data.py에서 자동 삽입(생활용어 300, 일본어/중국어 각 20)"""
         try:
             from core.phrase_data import LANG_PHRASES
         except ImportError:
@@ -797,9 +807,9 @@ class DBManager:
             cursor.execute("SELECT COUNT(*) FROM phrases")
         return cursor.fetchone()[0]
 
-    # --- ??ν븳 ?댁뒪 DB (2026-09-06) ---
+    # --- 저장 뉴스 DB (2026-09-06) ---
     def add_saved_news(self, title, link, description="", pub_date="", source="", category=""):
-        """湲곗궗 ??? 항목 ?조회 留곹겕硫?False 諛섑솚."""
+        """기사 저장. 항목이 이미 존재하면 False 반환."""
         try:
             cursor = self.conn.cursor()
             cursor.execute(
@@ -850,9 +860,9 @@ class DBManager:
         cursor.execute("SELECT COUNT(*) FROM saved_news")
         return cursor.fetchone()[0]
 
-    # --- 利먭꺼李얘린 紐낆뼵/怨좎궗?깆뼱/?쒖옄 DB (2026-09-12) ---
+    # --- 즐겨찾기 명언/고사성어/시조 DB (2026-09-12) ---
     def add_favorite_quote(self, item_id, text, meaning="", source="", kind="", added_at=None):
-        """紐낆뼵/怨좎궗?깆뼱/?쒖옄 利먭꺼李얘린 ??? 항목 추가硫?False."""
+        """명언/고사성어/시조 즐겨찾기 저장. 이미 있으면 False."""
         from datetime import datetime
         if added_at is None:
             added_at = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -868,7 +878,7 @@ class DBManager:
             return False
 
     def get_favorite_quotes(self):
-        """利먭꺼李얘린 紐⑸줉 諛섑솚 (理쒓렐 ??μ닚)."""
+        """즐겨찾기 목록 반환(최근 저장순)."""
         cursor = self.conn.cursor()
         cursor.execute(
             "SELECT id, item_id, text, meaning, source, kind, added_at FROM favorite_quotes ORDER BY added_at DESC"
@@ -887,20 +897,20 @@ class DBManager:
         ]
 
     def is_favorite_quote(self, item_id):
-        """item_id 湲곗? 利먭꺼李얘린 ?щ?."""
+        """item_id 기준 즐겨찾기 여부."""
         cursor = self.conn.cursor()
         cursor.execute("SELECT COUNT(*) FROM favorite_quotes WHERE item_id=?", (item_id,))
         return cursor.fetchone()[0] > 0
 
     def remove_favorite_quote(self, item_id):
-        """item_id 湲곗? 利먭꺼李얘린 ?삭제. 議댁옱?섎㈃ True."""
+        """item_id 기준 즐겨찾기 삭제. 존재하면 True."""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM favorite_quotes WHERE item_id=?", (item_id,))
         self.conn.commit()
         return cursor.rowcount > 0
 
     def remove_favorite_quote_by_id(self, fav_id):
-        """DB id 湲곗? 利먭꺼李얘린 ?삭제."""
+        """DB id 기준 즐겨찾기 삭제."""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM favorite_quotes WHERE id=?", (int(fav_id),))
         self.conn.commit()
@@ -911,27 +921,28 @@ class DBManager:
         cursor.execute("SELECT COUNT(*) FROM favorite_quotes")
         return cursor.fetchone()[0]
 
-    # --- 利앷텒 ?????(2026-09-06) ---
+    # --- 증권 저장목록(2026-09-06) ---
     def add_saved_stock(self, symbol, name, price):
-        """醫낅ぉ ??? 항목 ?조회 ?щ낵?대㈃ False 諛섑솚."""
+        """종목 저장. 항목이 이미 저장되어 있으면 False 반환."""
         try:
             cursor = self.conn.cursor()
             cursor.execute(
                 "INSERT INTO saved_markets (symbol, name, price, category, source_api) VALUES (?,?,?,?,?)",
-                (symbol, name, price, "二쇱떇", "mock"))
+                (symbol, name, price, "주식", "mock"))
             self.conn.commit()
             return True
         except sqlite3.IntegrityError:
             return False
 
     def get_saved_stocks(self):
-        """?조회 醫낅ぉ 紐⑸줉 諛섑솚"""
+        """저장된 종목 목록 반환"""
         cursor = self.conn.cursor()
-        cursor.execute("SELECT id, symbol, name, price FROM saved_markets ORDER BY saved_at DESC")
-        return [{"id": r[0], "symbol": r[1], "name": r[2], "price": r[3]} for r in cursor.fetchall()]
+        cursor.execute("SELECT id, symbol, name, price, category FROM saved_markets ORDER BY saved_at DESC")
+        return [{"id": r[0], "symbol": r[1], "name": r[2], "price": r[3], "category": r[4]}
+                for r in cursor.fetchall()]
 
     def delete_saved_stock(self, stock_id):
-        """ID濡????醫낅ぉ ?삭제"""
+        """ID로 저장된 종목 삭제"""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM saved_markets WHERE id=?", (stock_id,))
         self.conn.commit()
@@ -963,9 +974,9 @@ class DBManager:
         self.conn.commit()
         return cursor.rowcount > 0
 
-    # --- 媛怨꾨? (2026-09-12 異붽?) ---
+    # --- 가계부 (2026-09-12 추가) ---
     def add_transaction(self, date, type_, category, amount, memo=""):
-        """?섏엯/吏異?湲곕줉 異붽?"""
+        """수입/지출 기록 추가"""
         cursor = self.conn.cursor()
         cursor.execute(
             "INSERT INTO transactions (date, type, category, amount, memo, saved_at) VALUES (?,?,?,?,?,?)",
@@ -974,7 +985,7 @@ class DBManager:
         return cursor.lastrowid
 
     def get_transactions(self, month=None):
-        """媛怨꾨? 紐⑸줉 諛섑솚 (???꾪꽣 媛??"""
+        """가계부 목록 반환(월 필터 가능)"""
         cursor = self.conn.cursor()
         if month:
             cursor.execute(
@@ -986,13 +997,13 @@ class DBManager:
                 for r in cursor.fetchall()]
 
     def delete_transaction(self, trans_id):
-        """媛怨꾨? ??ぉ ?삭제"""
+        """가계부 항목 삭제"""
         cursor = self.conn.cursor()
         cursor.execute("DELETE FROM transactions WHERE id=?", (int(trans_id),))
         self.conn.commit()
 
     def get_month_summary(self, year, month):
-        """?붾퀎 ?섏엯/吏異??쒖?異??붿빟"""
+        """월별 수입/지출/순저축 요약"""
         ym = f"{year}-{month:02d}"
         cursor = self.conn.cursor()
         cursor.execute("SELECT COALESCE(SUM(amount),0) FROM transactions WHERE date LIKE ? AND type='수입'", (f"{ym}%",))
@@ -1002,7 +1013,7 @@ class DBManager:
         return {"income": income, "expense": expense, "savings": income - expense}
 
     def get_category_summary(self, year, month, type_="지출"):
-        """?붾퀎 移댄뀒怨좊━蹂?吏묎퀎"""
+        """월별 카테고리별 집계"""
         ym = f"{year}-{month:02d}"
         cursor = self.conn.cursor()
         cursor.execute(
@@ -1012,7 +1023,7 @@ class DBManager:
 
     # --- 과목별 데이터 조회 (2026-09-12 추가) ---
     def get_subject_data(self, subject, keyword=None):
-        """怨쇰ぉ蹂?데이터??硫붾え 議고쉶"""
+        """과목별 데이터 메모 조회"""
         cursor = self.conn.cursor()
         if keyword:
             cursor.execute("SELECT id, subject, keyword, content, updated_at FROM study_subject_data WHERE subject=? AND keyword=?", (subject, keyword))
@@ -1025,7 +1036,7 @@ class DBManager:
                 for r in cursor.fetchall()]
 
     def set_subject_data(self, subject, keyword, content):
-        """怨쇰ぉ蹂?데이터??硫붾え ???(UPSERT)"""
+        """과목별 데이터 메모 저장(UPSERT)"""
         cursor = self.conn.cursor()
         now = datetime.now().strftime("%Y-%m-%d %H:%M")
         cursor.execute("""
@@ -1036,7 +1047,7 @@ class DBManager:
         self.conn.commit()
 
     def search_subject_data(self, subject, query):
-        """怨쇰ぉ蹂?데이터??寃??"""
+        """과목별 데이터 검색"""
         cursor = self.conn.cursor()
         q = f"%{query}%"
         cursor.execute("SELECT id, subject, keyword, content, updated_at FROM study_subject_data WHERE subject=? AND (keyword LIKE ? OR content LIKE ?) ORDER BY keyword", (subject, q, q))
