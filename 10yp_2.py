@@ -96,15 +96,12 @@ class SchedulerApp(ttk.Window):
             self.api_key = get_api_key("fss_stock") or ""
         except (OSError, ValueError, KeyError):
             self.api_key = ""
-
         self.api_keys = {
             "fss_stock": self.api_key,
             "fss_product": "",
             "fss_index": "",
             "fss_company": "",
         }
-        # market_fetcher 미리 생성
-        self.market_fetcher = MarketFetcher(self.api_key)
         try:
             from core.config_manager import get_all_api_keys
             saved = get_all_api_keys()
@@ -1610,279 +1607,525 @@ class SchedulerApp(ttk.Window):
 
     # -------------------------------------------------------------
     # 뷰 5: 증권 탭 (금융원 Open API 호출 / 실시간 시세 / 저장)
+# -------------------------------------------------------------
+    # 뷰 5: 증권  (공공데이터포털 주식시세 API / 비동기 검색 / 저장목록)
+    #   2026-09-18 복원: Treeview 7열(종목코드/종목명/종가/전일대비/등락률/거래량/시장)
     # -------------------------------------------------------------
+    # Treeview column spec: (key, heading, width, anchor)
+    _MARKET_COLS = (
+        ("symbol", "종목코드", 90, "center"),
+        ("name", "종목명", 180, "w"),
+        ("price", "종가", 110, "e"),
+        ("change", "전일대비", 110, "e"),
+        ("change_pct", "등락률", 90, "e"),
+        ("volume", "거래량", 130, "e"),
+        ("market", "시장", 90, "center"),
+    )
+    # 종목코드 셀 보존용 제로폭 공백.
+    # 2026-09-18 실측(Temp/tk_symbol_probe.json): Tkinter Treeview는 숫자로 보이는 셀 값을
+    # int로 변환해 앞자리 0을 잃는다. "000810" → int 810, "000810\n" → int 810 이지만
+    # "000810\u200b" → str 유지(화면에는 000810로 보임). 따라서 ZWSP를 붙인다.
+    _SYM_ZWSP = "\u200b"
+    # 상태 라벨 색상 (ttkbootstrap bootstyle 대신 직접 색상 지정 → 스타일 영향 없음)
+    _STATUS_FG = {
+        "info": "#0d6efd",
+        "success": "#0a7a3a",
+        "warning": "#b8860b",
+        "danger": "#b00020",
+        "secondary": "#666666",
+    }
+
     def load_market_data(self):
-        """금융 데이터 비동기 수집 (UI 블로킹 방지)"""
-        self.market_fetcher = MarketFetcher(self.api_key)
-        threading.Thread(target=self._fetch_and_render_market, daemon=True).start()
-
-    def _fetch_and_render_market(self):
-        """백그라운드에서 API 호출 → UI 스레드로 결과 전달"""
-        try:
-            result = self.market_fetcher.get_indices()
-        except Exception as e:  # noqa: BLE001 - UI 스레드 경계: 예상 외 오류도 폴백으로 (의도적 광범위)
-            result = handle_error(e, context="증권 지수 조회",
-                                  fallback={"error": str(e), "result": {"items": []}})
-        items = result.get("result", {}).get("items", [])
-        self.after(0, lambda: self._render_market_ui(items))
-
-    def _render_market_ui(self, items: list):
-        """API 결과를 Treeview로 표시"""
-        if hasattr(self, "_market_tree") and self._market_tree:
-            for item in self._market_tree.get_children():
-                self._market_tree.delete(item)
-            for row in items:
-                self._market_tree.insert("", "end", values=(
-                    row.get("symbol", ""),
-                    row.get("name", ""),
-                    row.get("price", ""),
-                    row.get("change", ""),
-                    row.get("change_pct", ""),
-                ))
-
-    def setup_market_view(self):
-        """📈 증권 (Market) 탭 - 전문 카드형 레이아웃"""
-        container = ttk.LabelFrame(self.content_area, text="📈 증권 (Market)")
-        container.pack(fill=BOTH, expand=YES, padx=10, pady=10)
-
-        # 컨트롤 바: 검색 + 저장목록 + 투자일기 (증권 탭 상단)
-        top = ttk.Frame(container)
-        top.pack(fill=X, pady=(0, 5))
-
-        self.market_search_var = tk.StringVar(value="삼성")
-        ttk.Label(top, text="검색:", font=("Malgun Gothic", 10)).pack(side=LEFT, padx=(0, 4))
-        search_entry = ttk.Entry(top, textvariable=self.market_search_var, width=22)
-        search_entry.pack(side=LEFT, padx=(0, 6))
-        search_entry.bind("<Return>", lambda e: self._search_market())
-        ttk.Button(top, text="검색", command=self._search_market,
-                   bootstyle="primary").pack(side=LEFT)
-        ttk.Button(top, text="📋 저장목록", command=self._toggle_market_saver,
-                   bootstyle="secondary-outline").pack(side=RIGHT, padx=(6, 0))
-        ttk.Button(top, text="📔 투자일기", command=self.show_investment_journal,
-                   bootstyle="success-outline").pack(side=RIGHT, padx=(2, 0))
-
-        self.market_mode = "search"
-        self._market_info_lbl = ttk.Label(
-            container,
-            text="증권 검색 결과를 표시합니다.",
-            font=("Malgun Gothic", 11, "bold"),
-            foreground=("grey40"),
-        )
-        self._market_info_lbl.pack(anchor="w", padx=(0, 0), pady=(4, 2))
-
-        self._market_status_lbl = ttk.Label(
-            container,
-            text="",
-            font=("Malgun Gothic", 9),
-            foreground=("grey55"),
-        )
-        self._market_status_lbl.pack(anchor="w", padx=(0, 0), pady=(0, 2))
-
-        # 🎯 전문 증권 카드 위젯 삽입 (market_fetcher가 아직 없어도 안전)
-        try:
-            from ui.market_widget import MarketWidget
-            # SchedulerApp가 setup_market_view를 먼저 호출할 수 있으므로
-            # market_fetcher가 없으면 안전하게 임시 생성
-            if hasattr(self, "market_fetcher") and self.market_fetcher is not None:
-                mf = self.market_fetcher
-            else:
-                mf = MarketFetcher(getattr(self, "api_key", "") or "")
-            self._market_widget = MarketWidget(container, market_fetcher=mf)
-            self._market_widget.pack(fill=BOTH, expand=YES)
-        except Exception:
-            self._market_widget = None
-            ttk.Label(container, text="⚠️ 증권 화면 위젯 로드 실패",
-                      font=("Malgun Gothic", 11), foreground="red").pack(pady=20)
-
-        # 초기 검색 유지 (기존 로직 호환)
+        """증권 데이터 새로고침 (검색과 동일한 비동기 경로 재사용)"""
         self._search_market()
-
 
     def _clear_tree(self, tree):
         """Treeview 위젯의 모든 행 삭제"""
         for item in tree.get_children():
             tree.delete(item)
 
-    def _search_market(self, keyword=None):
-        """종목 검색을 본체 Treeview에 표시한다. keyword가 없으면 입력값/기본값을 쓴다.
-        market_fetcher가 아직 없으면 안전하게 생성하거나, 실패 시 빈 결과로 버틴다.
-        Treeview가 없는 경우에도 앱이 튕기지 않도록 최소 표시를 시도한다."""
-        mfk = getattr(self, "market_fetcher", None)
-        if mfk is None:
-            try:
-                self.market_fetcher = MarketFetcher(getattr(self, "api_key", "") or "")
-                mfk = self.market_fetcher
-            except Exception:
-                self.market_fetcher = MarketFetcher("")
-                mfk = self.market_fetcher
-        if keyword is None:
-            var = getattr(self, "market_search_var", None)
-            keyword = var.get().strip() if var else "삼성"
-        keyword = keyword.strip() or "삼성"
+    def _clear_market_tree(self):
+        """증권 Treeview + 원본 메타 초기화"""
+        if hasattr(self, "_market_tree"):
+            self._clear_tree(self._market_tree)
+        self._market_meta = {}
 
-        result = {}
+    # ── 표시값 포맷/복원 헬퍼 (2026-09-18 신규) ──
+    @classmethod
+    def _cell_str(cls, v) -> str:
+        """Treeview 셀 값 → 표시용 문자열 (ZWSP 제거, int 변환 흔적 복원)"""
+        if v is None:
+            return ""
+        return str(v).replace(cls._SYM_ZWSP, "").strip()
+
+    @classmethod
+    def _sym_cell(cls, v) -> str:
+        """종목코드 셀 값: 앞자리 0 보존을 위해 ZWSP를 덧붙인다."""
+        s = cls._cell_str(v)
+        return (s + cls._SYM_ZWSP) if s else "-"
+
+    @classmethod
+    def _raw_symbol(cls, v) -> str:
+        """셀/문자열 → 종목코드 (6자리 미만 숫자는 앞자리 0 복원)"""
+        s = cls._cell_str(v)
+        if s.isdigit() and len(s) <= 6:
+            return s.zfill(6)
+        return s
+
+    @classmethod
+    def _norm_symbol(cls, v) -> str:
+        """API symbol normalization: 12-char ISIN -> 6-digit short code; pad short digits."""
+        s = cls._cell_str(v)
+        if len(s) == 12 and s[:2].isalpha() and s[2].isdigit():
+            core = s[3:9]
+            if core.isdigit():
+                return core
+        if s.isdigit() and len(s) <= 6:
+            return s.zfill(6)
+        return s
+
+    @staticmethod
+    def _to_num(v):
+        """'1,234' / '-12.5' / '+1.35%' → float (변환 불가 시 None)"""
+        if v is None:
+            return None
+        s = str(v).replace(",", "").replace("%", "").strip()
+        if s.startswith("+"):
+            s = s[1:]
+        if not s:
+            return None
         try:
-            result = mfk.search_stocks(keyword)
-        except Exception as e:
-            result = handle_error(e, context="증권 검색",
-                                  fallback={"error": str(e), "result": {"items": []}})
+            return float(s)
+        except ValueError:
+            return None
 
-        items = (result or {}).get("result", {}).get("items", [])
-        api_error = (result or {}).get("error", "")
+    @classmethod
+    def _fmt_price(cls, v) -> str:
+        """종가: 천단위 구분 (숫자가 아니면 '-')"""
+        n = cls._to_num(v)
+        return f"{n:,.0f}" if n is not None else "-"
 
-        if not items or api_error:
-            mock_items = []
-            try:
-                mock_items = mfk._mock("stock")["result"]["items"]
-            except Exception:
-                mock_items = []
-            items = mock_items
+    @classmethod
+    def _fmt_signed(cls, v) -> str:
+        """전일대비: 부호 유지 + 천단위 구분"""
+        n = cls._to_num(v)
+        return f"{n:+,.0f}" if n is not None else "-"
 
-        tree = getattr(self, "_market_tree", None)
-        if tree and items:
-            self._clear_tree(tree)
-            for row in items[:200]:
-                tree.insert("", "end", values=(
-                    row.get("symbol", ""),
-                    row.get("name", ""),
-                    row.get("price", ""),
-                    row.get("change", ""),
-                    row.get("change_pct", ""),
-                ))
+    @classmethod
+    def _fmt_vol(cls, v) -> str:
+        """거래량: 천단위 구분"""
+        n = cls._to_num(v)
+        return f"{n:,.0f}" if n is not None else "-"
 
-        info = getattr(self, "_market_info_lbl", None)
-        status = getattr(self, "_market_status_lbl", None)
-        now_str = datetime.now().strftime("%H:%M:%S")
-        if api_error:
-            if info:
-                info.config(text=f"실데이터 조회 실패 -> Mock 표시 ({api_error[:50]})")
-            if status:
-                status.config(text=f"검색어: '{keyword}' / 오류: {api_error[:80]} / 최종: {now_str}")
-        elif not items:
-            if info:
-                info.config(text="검색 결과 없음")
-            if status:
-                status.config(text=f"검색어: '{keyword}' / 결과 0건 / 최종: {now_str}")
-        else:
-            if info:
-                info.config(text=f"검색: '{keyword}' {len(items)}건")
-            if status:
-                status.config(text=f"검색어: '{keyword}' / 결과 {len(items)}건 / 최종: {now_str}")
+    @classmethod
+    def _fmt_pct(cls, v) -> str:
+        """등락률: '%' 유무와 무관하게 항상 부호 + % 로 통일"""
+        if v is None:
+            return "-"
+        s = str(v).strip()
+        if not s:
+            return "-"
+        n = cls._to_num(s)
+        return f"{n:+.2f}%" if n is not None else s
+
+    @classmethod
+    def _market_tag(cls, row: dict) -> str:
+        """등락 방향 색상 태그 (한국 관례: 상승=빨강, 하락=파랑)"""
+        n = cls._to_num((row or {}).get("change"))
+        if n is None:
+            return "flat"
+        if n > 0:
+            return "up"
+        if n < 0:
+            return "down"
+        return "flat"
+
+    @classmethod
+    def _market_row(cls, row: dict) -> tuple:
+        """검색 결과 dict → Treeview 7열 표시값 (숫자는 반드시 포맷해 문자열 유지)"""
+        row = row or {}
+        return (
+            cls._sym_cell(row.get("symbol", "")),
+            row.get("name", "") or "-",
+            cls._fmt_price(row.get("price")),
+            cls._fmt_signed(row.get("change")),
+            cls._fmt_pct(row.get("change_pct")),
+            cls._fmt_vol(row.get("volume")),
+            row.get("market", "") or "-",
+        )
+
+    def setup_market_view(self):
+        """📈 증권 (Market) 탭 - 검색/저장/수정/삭제 + 비동기 조회"""
+        container = ttk.LabelFrame(self.content_area, text="📈 증권 (Market)")
+        container.pack(fill=BOTH, expand=YES, padx=10, pady=10)
+
+        top = ttk.Frame(container)
+        top.pack(fill=X, pady=(0, 5))
+        ttk.Label(top, text="🔍 검색:", font=("Malgun Gothic", 9)).pack(side=LEFT, padx=(0, 5))
+        self.market_search_var = tk.StringVar(value="삼성")
+        self.market_search_entry = ttk.Entry(top, textvariable=self.market_search_var, width=15)
+        self.market_search_entry.pack(side=LEFT, padx=(0, 5))
+        self.market_search_entry.bind("<Return>", lambda e: self._search_market())
+        ttk.Button(top, text="🔎 검색", command=self._search_market,
+                   bootstyle="info").pack(side=LEFT, padx=(0, 5))
+        ttk.Button(top, text="💾 저장", command=self._save_selected_market,
+                   bootstyle="success-outline").pack(side=LEFT, padx=(0, 5))
+        ttk.Button(top, text="🗑 삭제", command=self._delete_selected_market,
+                   bootstyle="danger-outline").pack(side=LEFT, padx=(0, 5))
+        ttk.Button(top, text="📋 저장목록", command=self._toggle_market_saver,
+                   bootstyle="secondary-outline").pack(side=RIGHT)
+        ttk.Button(top, text="📔 투자일기", command=self.show_investment_journal,
+                   bootstyle="success-outline").pack(side=RIGHT, padx=(0, 6))
+
+        self.market_mode = "search"          # "search" 또는 "saved"
+        self._market_search_token = 0        # 비동기 결과 폐기용 토큰
+        self._market_pending = None          # 워커 결과 보관소 (Tk 호출 없는 전달 경로)
+        self._market_poll_job = None         # 결과 회수용 after 작업 id
+        self._market_meta = {}               # iid -> 원본 row dict (Tk 셀 int 변환 우회)
+
+        tree_wrap = ttk.Frame(container)
+        tree_wrap.pack(fill=BOTH, expand=YES, pady=(0, 5))
+        cols = tuple(spec[0] for spec in self._MARKET_COLS)
+        self._market_tree = ttk.Treeview(tree_wrap, columns=cols, show="headings", height=12)
+        for key, heading, width, anchor in self._MARKET_COLS:
+            self._market_tree.heading(key, text=heading)
+            self._market_tree.column(key, width=width, anchor=anchor, stretch=(key == "name"))
+        vsb = ttk.Scrollbar(tree_wrap, orient=VERTICAL, command=self._market_tree.yview)
+        self._market_tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=RIGHT, fill=Y)
+        self._market_tree.pack(side=LEFT, fill=BOTH, expand=YES)
+        self._market_tree.tag_configure("up", foreground="#c0392b")
+        self._market_tree.tag_configure("down", foreground="#1f4e9c")
+        self._market_tree.tag_configure("flat", foreground="#555555")
+        self._market_tree.bind("<<TreeviewSelect>>", lambda e: self._on_market_select())
+        self._market_tree.bind("<Double-1>", lambda e: self._edit_selected_market())
+
+        self._market_info_lbl = ttk.Label(container, text="종목을 선택하세요.",
+                                          font=("Malgun Gothic", 9))
+        self._market_info_lbl.pack(anchor="w", pady=2)
+        self._market_status_lbl = ttk.Label(container, text="", font=("Malgun Gothic", 8),
+                                            foreground=self._STATUS_FG["secondary"])
+        self._market_status_lbl.pack(anchor="w", pady=(0, 2))
+
+        self._market_chart_canvas = tk.Canvas(container, height=100, bg="#f8f9fa", highlightthickness=1)
+        self._market_chart_canvas.pack(fill=X, pady=3)
+
+        self._search_market()
+
+    def _set_market_info(self, text: str, kind: str | None = None):
+        """하단 요약 라벨 갱신 (위젯이 없으면 무시)"""
+        lbl = getattr(self, "_market_info_lbl", None)
+        if lbl is None:
+            return
+        try:
+            if kind:
+                lbl.config(text=text, foreground=self._STATUS_FG.get(kind, "#000000"))
+            else:
+                lbl.config(text=text)
+        except tk.TclError:
+            pass
+
+    def _set_market_status(self, text: str, kind: str = "secondary"):
+        """상태(진행/경고) 라벨 갱신 (위젯이 없으면 무시)"""
+        lbl = getattr(self, "_market_status_lbl", None)
+        if lbl is None:
+            return
+        try:
+            lbl.config(text=text, foreground=self._STATUS_FG.get(kind, self._STATUS_FG["secondary"]))
+        except tk.TclError:
+            pass
+
+    # ── 검색 (비동기: 네트워크는 워커 스레드, UI 갱신은 after) ──
+    def _search_market(self, keyword=None):
+        """종목 검색 시작 (2026-09-18: UI 멈춤 방지를 위해 스레드로 위임)"""
+        if keyword is None:
+            keyword = self.market_search_var.get().strip() or "삼성"
+        keyword = str(keyword).strip() or "삼성"
         self.market_mode = "search"
-        return items
+        self._market_search_token = getattr(self, "_market_search_token", 0) + 1
+        token = self._market_search_token
+        self._set_market_status(f"🔎 '{keyword}' 조회 중...", "info")
+        self._market_pending = None
+        threading.Thread(target=self._run_market_search,
+                         args=(keyword, token), daemon=True).start()
+        self._schedule_market_poll()
 
-    def _save_selected_market(self):
-        """선택된 종목 저장"""
+    def _schedule_market_poll(self):
+        """워커 결과를 UI 스레드에서 회수하기 위한 폴링 예약 (스레드 경계 안전)"""
+        if getattr(self, "_market_poll_job", None) is not None:
+            return
+        try:
+            self._market_poll_job = self.after(120, self._poll_market_result)
+        except tk.TclError:
+            self._market_poll_job = None
+
+    def _poll_market_result(self):
+        """UI 스레드: 워커가 넘긴 결과를 회수 (미도착 시 계속 폴링)"""
+        self._market_poll_job = None
+        pending = getattr(self, "_market_pending", None)
+        if pending is None:
+            self._schedule_market_poll()
+            return
+        self._market_pending = None
+        try:
+            self._apply_market_rows(*pending)
+        except tk.TclError:
+            pass  # 창 종료 중
+
+    def _run_market_search(self, keyword, token):
+        """워커 스레드: API 호출만 담당 → 결과 반영은 UI 스레드(_apply_market_rows)로 위임"""
+        api_error = ""
+        items = []
+        try:
+            fetcher = MarketFetcher(self.api_key or "")
+        except Exception as e:  # noqa: BLE001 - 의도적 폴백: 생성 실패 시에도 화면은 살린다
+            fetcher = MarketFetcher("")
+            api_error = handle_error(e, context="증권 검색(초기화)", fallback=str(e))
+        if not api_error:
+            try:
+                result = fetcher.search_stocks(keyword) or {}
+                items = list(result.get("result", {}).get("items", []) or [])
+                api_error = result.get("error", "") or ""
+            except Exception as e:  # noqa: BLE001 - 워커 스레드 경계: 예상 외 오류도 폴백
+                items = []
+                api_error = handle_error(e, context="증권 검색", fallback=str(e))
+        mock_used = False
+        if not items:
+            mock_used = True
+            try:
+                items = list(fetcher._mock("stock")["result"]["items"])
+            except Exception:  # noqa: BLE001 - 샘플 데이터까지 실패하면 빈 화면
+                items = []
+        payload = [dict(x) for x in items if isinstance(x, dict)]
+        # Tk 호출은 메인 스레드에서만: 워커는 결과만 넘기고 UI가 폴링으로 회수한다
+        self._market_pending = (payload, api_error, keyword, mock_used, token)
+
+    def _apply_market_rows(self, items, api_error, keyword, mock_used, token):
+        """UI 스레드: 검색 결과를 Treeview에 반영 (오래된 토큰 결과는 폐기)"""
+        if token != getattr(self, "_market_search_token", -1):
+            return
+        if not hasattr(self, "_market_tree"):
+            return
+        # 동일 종목이 기준일만 달리해 여러 건 오므로 base_date 최신 1건만 남긴다
+        best = {}
+        order = []
+        for row in items:
+            symbol = self._norm_symbol(row.get("symbol"))
+            if not symbol:
+                continue
+            row = dict(row)
+            row["symbol"] = symbol
+            prev = best.get(symbol)
+            if prev is None:
+                best[symbol] = row
+                order.append(symbol)
+            elif self._cell_str(row.get("base_date")) > self._cell_str(prev.get("base_date")):
+                best[symbol] = row
+        self._clear_market_tree()
+        rows = 0
+        for symbol in order:
+            row = best[symbol]
+            self._market_meta[symbol] = row
+            try:
+                self._market_tree.insert("", "end", iid=symbol,
+                                         values=self._market_row(row),
+                                         tags=(self._market_tag(row),))
+            except tk.TclError:
+                self._market_meta.pop(symbol, None)
+                continue
+            rows += 1
+        self.market_mode = "search"
+        if rows == 0:
+            self._set_market_status("검색 결과가 없습니다.", "secondary")
+            self._set_market_info(f"'{keyword}' 검색 결과가 없습니다.", "warning")
+        elif mock_used:
+            self._set_market_status(f"⚠️ 실데이터 조회 실패 → 샘플 데이터 {rows}건 표시", "warning")
+            self._set_market_info(f"⚠️ {api_error[:90]}" if api_error
+                                  else "⚠️ API 키/네트워크를 확인하세요. 샘플 데이터 표시 중.", "warning")
+        else:
+            self._set_market_status(f"✅ '{keyword}' 실데이터 {rows}건", "success")
+            self._set_market_info(f"🔍 '{keyword}' 검색 결과 {rows}건")
+        self._draw_market_chart()
+
+    # ── 선택/저장/수정/삭제/전환 ──
+    def _sel_market(self):
+        """선택 행 → (iid, meta dict). 선택이 없으면 (None, None)"""
+        if not hasattr(self, "_market_tree"):
+            return None, None
         sel = self._market_tree.selection()
         if not sel:
-            messagebox.showwarning("경고", "저장할 종목을 선택하세요.")
-            return
-        values = self._market_tree.item(sel[0])["values"]
-        symbol, name, price, change, change_pct = values
+            return None, None
+        iid = sel[0]
+        meta = getattr(self, "_market_meta", {}).get(iid)
+        if meta is None:  # 메타 유실 시 iid에서 복원 (검색 모드 iid = 종목코드)
+            meta = {"id": iid, "symbol": self._raw_symbol(iid)}
+        return iid, meta
+
+    def _market_cell(self, iid, index):
+        """Treeview iid의 index열 표시값 (없으면 '-')"""
         try:
-            s = str(price).replace(",", "").strip()
-            try:
-                saved_price = float(s) if s else 0.0
-            except ValueError:
-                saved_price = 0.0
-        except ValueError:
-            saved_price = 0.0
-        self.db.add_saved_stock(symbol, name, saved_price)
+            vals = list(self._market_tree.item(iid)["values"])
+        except tk.TclError:
+            return "-"
+        return self._cell_str(vals[index]) if len(vals) > index else "-"
+
+    def _save_selected_market(self):
+        """선택 종목을 저장목록(DB)에 추가"""
+        iid, meta = self._sel_market()
+        if not iid:
+            messagebox.showwarning("경고", "저장할 종목을 표에서 선택하세요.")
+            return
+        symbol = self._raw_symbol(meta.get("symbol") or iid)
+        name = meta.get("name") or symbol
+        if not symbol:
+            messagebox.showwarning("경고", "종목코드를 확인할 수 없어 저장할 수 없습니다.")
+            return
+        price_val = self._to_num(meta.get("price")) or 0.0
+        if self.db.add_saved_stock(symbol, name, price_val) is False:
+            messagebox.showinfo("알림", f"{name}({symbol})은(는) 이미 저장되어 있습니다.")
+            return
+        self._set_market_status(f"{name}({symbol}) 저장 완료", "success")
         messagebox.showinfo("완료", f"{name}({symbol})을(를) 저장했습니다.")
 
     def _edit_selected_market(self):
-        """선택된 저장된 종목 수정 (더블클릭)"""
-        sel = self._market_tree.selection()
-        if not sel:
+        """저장된 종목 수정 (저장목록 모드 전용 - id 기준 갱신)"""
+        if self.market_mode != "saved":
+            messagebox.showinfo("알림", "수정은 '📋 저장목록' 상태에서 종목을 선택해 주세요.")
             return
-        values = self._market_tree.item(sel[0])["values"]
-        symbol, name, price, change, change_pct = values
-        stock_id = sel[0]  # iid로 저장된 id
-        
+        iid, meta = self._sel_market()
+        if not iid:
+            return
+        symbol = self._raw_symbol(meta.get("symbol") or "")
+        name = meta.get("name") or symbol
+        price = meta.get("price")
+
         edit_win = ttk.Toplevel(self)
         edit_win.title(f"종목 수정: {name}")
-        edit_win.geometry("400x200")
+        edit_win.geometry("400x220")
         edit_win.grab_set()
-        
-        ttk.Label(edit_win, text="종목명:").grid(row=0, column=0, padx=10, pady=10)
+
+        ttk.Label(edit_win, text="종목명:").grid(row=0, column=0, padx=10, pady=8)
         edit_name = ttk.Entry(edit_win, width=20)
-        edit_name.grid(row=0, column=1, padx=10, pady=10)
+        edit_name.grid(row=0, column=1, padx=10, pady=8)
         edit_name.insert(0, name)
-        
-        ttk.Label(edit_win, text="가격:").grid(row=1, column=0, padx=10, pady=10)
+
+        ttk.Label(edit_win, text="종목코드:").grid(row=1, column=0, padx=10, pady=8)
+        edit_symbol = ttk.Entry(edit_win, width=20)
+        edit_symbol.grid(row=1, column=1, padx=10, pady=8)
+        edit_symbol.insert(0, symbol)
+
+        ttk.Label(edit_win, text="가격:").grid(row=2, column=0, padx=10, pady=8)
         edit_price = ttk.Entry(edit_win, width=20)
-        edit_price.grid(row=1, column=1, padx=10, pady=10)
-        edit_price.insert(0, str(price))
-        
+        edit_price.grid(row=2, column=1, padx=10, pady=8)
+        edit_price.insert(0, str(price if price is not None else 0))
+
         def do_update():
-            raw_price = edit_price.get()
-            s = str(raw_price).replace(",", "").strip()
-            try:
-                price_val = float(s) if s else 0.0
-            except ValueError:
-                price_val = 0.0
-            self.db.update_saved_stock(
-                stock_id,
-                symbol=symbol,
-                name=edit_name.get(),
-                price=price_val
-            )
+            new_symbol = self._raw_symbol(edit_symbol.get()) or symbol
+            price_val = self._to_num(edit_price.get()) or 0.0
+            ok = self.db.update_saved_stock(iid, symbol=new_symbol,
+                                            name=edit_name.get().strip(), price=price_val)
             edit_win.destroy()
-            self._toggle_market_saver()  # 저장 목록 새로고침
-            
-        ttk.Button(edit_win, text="저장", command=do_update, bootstyle="success").grid(row=2, column=0, columnspan=2, pady=10)
+            self._refresh_saved_list()
+            if not ok:
+                messagebox.showwarning("경고", "수정할 항목을 찾지 못했습니다.")
+
+        ttk.Button(edit_win, text="저장", command=do_update,
+                   bootstyle="success").grid(row=3, column=0, columnspan=2, pady=10)
 
     def _delete_selected_market(self):
-        """선택된 종목 삭제 (검색 또는 저장 모드에서 동작)"""
-        sel = self._market_tree.selection()
-        if not sel:
+        """선택 종목 삭제 (검색: 표에서만 / 저장목록: DB에서 삭제)"""
+        iid, meta = self._sel_market()
+        if not iid:
             messagebox.showwarning("경고", "삭제할 종목을 선택하세요.")
             return
-        
+        name = meta.get("name") or self._raw_symbol(iid)
         if self.market_mode == "saved":
-            values = self._market_tree.item(sel[0])["values"]
-            name = values[1]
-            self.db.delete_saved_stock(sel[0])
-            messagebox.showinfo("완료", f"저장된 종목 '{name}'을(를) 삭제했습니다.")
-            self._toggle_market_saver()
+            if not messagebox.askyesno("삭제 확인", f"저장된 종목 '{name}'을(를) 삭제하시겠습니까?"):
+                return
+            self.db.delete_saved_stock(iid)
+            self._refresh_saved_list()
         else:
-            self._market_tree.delete(sel[0])
+            self._market_tree.delete(iid)
+            getattr(self, "_market_meta", {}).pop(iid, None)
 
     def _on_market_select(self):
-        """종목 선택 시 하단 정보/차트 표시"""
+        """종목 선택 시 하단 요약 라벨 + 차트 갱신"""
         if not hasattr(self, "_market_tree") or not hasattr(self, "_market_info_lbl"):
             return
-        sel = self._market_tree.selection()
-        if not sel:
+        iid, meta = self._sel_market()
+        if not iid:
             return
-        values = self._market_tree.item(sel[0])["values"]
-        symbol, name, price, change, change_pct = values
-        info_text = f"📌 {name} ({symbol}) | 가격: {price}원 | 전일대비: {change} ({change_pct})"
-        self._market_info_lbl.config(text=info_text)
+        symbol = self._raw_symbol(meta.get("symbol") or iid)
+        name = meta.get("name") or symbol
+        price = meta.get("price")
+        if price is None:  # 메타 유실 시 표시값에서 복원
+            price = self._market_cell(iid, 2)
+        change = meta.get("change")
+        if change is None:
+            change = self._market_cell(iid, 3)
+        pct = meta.get("change_pct")
+        if pct is None:
+            pct = self._market_cell(iid, 4)
+        vol = meta.get("volume")
+        if vol is None:
+            vol = self._market_cell(iid, 5)
+        market = meta.get("market") or self._market_cell(iid, 6)
+        self._set_market_info(
+            f"📌 {name} ({symbol}) | 종가 {self._fmt_price(price)}원 | "
+            f"전일대비 {self._fmt_signed(change)} ({self._fmt_pct(pct)}) | "
+            f"거래량 {self._fmt_vol(vol)} | {market}"
+        )
+        self._draw_market_chart()
 
-        # Mock 차트
-        self._market_chart_canvas.delete("all")
-        w, h = 400, 120
-        self._market_chart_canvas.config(width=w, height=h)
+    def _draw_market_chart(self):
+        """선택 종목 차트 (현재는 Mock 추세선 - 실데이터 차트는 P2 과제)"""
+        canvas = getattr(self, "_market_chart_canvas", None)
+        if canvas is None:
+            return
+        try:
+            canvas.delete("all")
+        except tk.TclError:
+            return
+        w, h = 400, 100
         prices = [75000, 75500, 74800, 76200, 75900, 76500, 77000]
-        x_step = w / len(prices)
         y_max, y_min = max(prices), min(prices)
-        pts = [(i * x_step, h - ((p - y_min) / (y_max - y_min) * (h - 20) + 10)) for i, p in enumerate(prices)]
-        self._market_chart_canvas.create_line(pts, fill="#0d6efd", width=2, smooth=True)
+        span = (y_max - y_min) or 1
+        x_step = w / len(prices)
+        pts = [(i * x_step, h - ((p - y_min) / span * (h - 20) + 10))
+               for i, p in enumerate(prices)]
+        canvas.create_line(pts, fill="#0d6efd", width=2, smooth=True)
 
     def _toggle_market_saver(self):
         """검색결과 ↔ 저장목록 전환"""
-        if self.market_mode == "search":
-            self._clear_tree(self._market_tree)
-            saved = self.db.get_saved_stocks()
-            for s in saved:
-                self._market_tree.insert("", "end", values=(
-                    s["symbol"], s["name"], f"{s['price']:,.0f}", "-", "-"
-                ), iid=str(s["id"]))
-            self._market_info_lbl.config(text=f"저장된 종목 {len(saved)}개")
-            self.market_mode = "saved"
-        else:
+        if self.market_mode != "search":
             self._search_market()
+            return
+        self._refresh_saved_list()
+
+    def _refresh_saved_list(self):
+        """저장목록 모드 화면 그리기 (검색 요청 없이 DB에서만)"""
+        self._market_search_token = getattr(self, "_market_search_token", 0) + 1
+        self._clear_market_tree()
+        saved = self.db.get_saved_stocks()
+        for s in saved:
+            symbol = self._raw_symbol(s.get("symbol"))
+            sid = str(s.get("id"))
+            if not symbol or not sid:
+                continue
+            self._market_meta[sid] = {"id": s.get("id"), "symbol": symbol,
+                                      "name": s.get("name") or symbol,
+                                      "price": s.get("price")}
+            try:
+                self._market_tree.insert("", "end", iid=sid, values=(
+                    self._sym_cell(symbol), s.get("name") or "-",
+                    self._fmt_price(s.get("price")), "-", "-", "-", "-",
+                ))
+            except tk.TclError:
+                self._market_meta.pop(sid, None)
+                continue
+        self.market_mode = "saved"
+        self._set_market_status(f"저장목록 {len(saved)}건 (DB)", "secondary")
+        self._set_market_info(f"저장된 종목 {len(saved)}개 - 더블클릭: 수정 / 🗑 삭제")
 
     # ── 투자 일기 팝업 (매수/매도 기록 + 월별 실현손익 — DB: investment_journal, 2026-09-13) ──
     def show_investment_journal(self):
@@ -3453,12 +3696,5 @@ class SchedulerApp(ttk.Window):
         messagebox.showinfo("복원 완료", f"{target} 복원이 완료되었습니다.\n각 탭을 다시 열면 최신 데이터로 갱신됩니다.")
 
 if __name__ == "__main__":
-    try:
-        SchedulerApp().mainloop()
-    except Exception as e:
-        import sys, traceback
-        etype = type(e).__name__
-        emsg = str(e).splitlines()[0] if str(e) else ""
-        sys.stderr.write(f"[{etype}] {emsg}\n")
-        traceback.print_exc(file=sys.stderr)
-
+    app = SchedulerApp()
+    app.mainloop()
