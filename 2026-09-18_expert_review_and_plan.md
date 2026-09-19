@@ -305,27 +305,30 @@
 
 ### Day 1 - 2026-09-18 (금) : 기반 정리 (P0-3, P0-4)
 - [x] 진단 문서 작성 및 커밋 (`5d481b5`)
-- [ ] `db_manager.py` mojibake 37 교정 (438/448/460/464는 코드와 동시 수정)
-- [ ] 엑셀 왕복 복구: `df.columns` 정정 + `import_schedules_from_df` 키 정정 + `required` 목록 일치
-- [ ] `tests/test_core.py`에 엑셀 왕복 테스트 1건 추가
-- 검증: `py_compile` 통과, `unittest` 35개 통과, export→import 실측
+- [x] `db_manager.py` mojibake 37 교정 (438/448/460/464는 코드와 동시 수정) — 커밋 `4bab4b8`
+- [x] 엑셀 왕복 복구: `df.columns` 정정 + `import_schedules_from_df` 키 정정 + `required` 목록 일치 — 커밋 `4bab4b8`
+- [x] `tests/test_core.py`에 엑셀 왕복 테스트 추가 (TestScheduleExcelRoundTrip 5건)
+- 검증: `py_compile` 통과, `unittest` 39개 통과, export→import 실측 (`Temp/day1_check.json`)
 
 ### Day 2 - 2026-09-19 (토) : 증권 P0 복구 (P0-1, P0-2, P0-5)
-- [ ] `setup_market_view`에서 Treeview(컬럼 7개)와 스크롤바 생성 (복구 원본: `Temp/10yp_2_initial.py` 1640-1687행)
-- [ ] `_market_tree` 기반으로 저장/수정/삭제/선택 핸들러 정리
-- [ ] `ui.market_widget` import 제거(부재 모듈 참조 삭제)
-- 검증: 뷰 스모크에서 `_market_tree` 존재 + 검색 결과 행수 > 0
+- [x] `setup_market_view`에서 Treeview(컬럼 7개)와 스크롤바 생성 (복구 원본: `Temp/10yp_2_initial.py` 1640-1687행) — 커밋 `5f7f80a`
+- [x] `_market_tree` 기반으로 저장/수정/삭제/선택 핸들러 정리 (iid=종목코드 + `_market_meta`)
+- [x] `ui.market_widget` import 제거(부재 모듈 참조 삭제, `_market_widget` 참조 0건)
+- 검증: 스모크에서 `_market_tree` 존재 + 검색 결과 26행 (`Temp/market_smoke.json`)
 
-### Day 3 - 2026-09-20 (일) : 증권 화면 품질 (P1-1, P1-2)
-- [ ] 검색 스레드화 + `after(0, ...)` UI 갱신
-- [ ] 숫자 포맷 헬퍼(가격 천단위, 부호, 퍼센트) + 우측 정렬 + 등락 색상
-- [ ] 선택 종목 요약 패널(종가/대비/등락률/거래량/시장)
-- [ ] Mock 폴백 경고 표시(빨강) 또는 비활성
-- 검증: 검색 중 UI 응답 유지, 표 컬럼/정렬 확인
+### Day 3 - 2026-09-20 (일) : 스케줄러 정리 (S-4/S-5/S-6) + 증권 품질 (P1-1, P1-2)
+- [x] 검색 스레드화 + UI 스레드 `after` 폴링 갱신 (워커→`_market_pending` 전달, 토큰 폐기) — 커밋 `5f7f80a`
+- [x] 숫자 포맷 헬퍼(`_fmt_price`/`_fmt_signed`/`_fmt_pct`/`_fmt_vol`) + 우측 정렬 + 등락 색상 — 커밋 `5f7f80a`
+- [x] 선택 종목 요약 패널(종가/대비/등락률/거래량/시장) — 커밋 `5f7f80a`
+- [x] Mock 폴백 경고 표시(주황) + 실데이터/샘플 구분 — 커밋 `5f7f80a`
+- [x] S-4 `set_schedule`/`get_schedule` 이중 정의 제거(단일 정의, `images=None` 기존 그림 유지)
+- [x] S-5 `investment_journal` DDL 중복 제거(`create_tables` 1곳만)
+- [x] S-6 이미지 왕복: 내보내기 세미콜론 셀 ↔ 가져오기 `parse_images_cell`
+- 검증: `unittest` 43개 통과(신규 4건: 이미지 보존/교체/왕복/단일 정의), `py_compile` 통과
 
 ### Day 4 - 2026-09-21 (월) : 증권 마감 + 테스트 승격 (P1-8)
 - [ ] `tests/test_ui_smoke.py` 추가(9개 뷰 + 증권 필수 위젯 검증)
-- [ ] 증권 미사용 코드(`_fetch_and_render_market` 등) 정리
+- [x] 증권 미사용 코드(`_fetch_and_render_market`/`_render_market_ui`) 정리 — 커밋 `5f7f80a`
 - 검증: 전체 테스트 통과, 커밋 및 푸시
 
 ### Day 5 - 2026-09-22 (화) : 학습 도메인 (P1-5)

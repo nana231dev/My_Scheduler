@@ -253,31 +253,12 @@ class DBManager:
             for r in cursor.fetchall()
         ]
 
-    # --- 일정 ---
-    def get_schedule(self, date_str):
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT schedule, journal FROM schedules WHERE date=?", (str(date_str),))
-        row = cursor.fetchone()
-        return {"schedule": row[0], "journal": row[1]} if row else {"schedule": "", "journal": ""}
-
+    # --- 일정 (get_schedule/set_schedule 단일 정의: 2026-09-20 S-4) ---
     def get_schedules_by_month(self, year, month):
         date_pattern = f"{year}-{month:02d}-%"
         cursor = self.conn.cursor()
         cursor.execute("SELECT date, schedule FROM schedules WHERE date LIKE ? ORDER BY date", (date_pattern,))
         return cursor.fetchall()
-
-    def set_schedule(self, date_str, schedule, journal):
-        cursor = self.conn.cursor()
-        # 내용이 없으면 삭제 (가져오기 시 빈 내용 처리는 이곳에서 조정)
-        if not str(schedule).strip() and not str(journal).strip():
-            self.delete_schedule(date_str)
-            return
-        cursor.execute("""
-            INSERT INTO schedules (date, schedule, journal)
-            VALUES (?,?,?)
-            ON CONFLICT(date) DO UPDATE SET schedule=excluded.schedule, journal=excluded.journal
-        """, (str(date_str), str(schedule), str(journal)))
-        self.conn.commit()
 
     def delete_schedule(self, date_str):
         cursor = self.conn.cursor()
@@ -328,22 +309,7 @@ class DBManager:
             cursor.execute("ALTER TABLE saved_news ADD COLUMN read_flag INTEGER DEFAULT 0")
             self.conn.commit()
 
-        # investment_journal 테이블 (구버전 DB 대비)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS investment_journal (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                date TEXT NOT NULL,
-                type TEXT NOT NULL,
-                symbol TEXT,
-                name TEXT,
-                quantity INTEGER DEFAULT 0,
-                price REAL DEFAULT 0,
-                commission REAL DEFAULT 0,
-                memo TEXT,
-                saved_at TEXT
-            )
-        ''')
-        self.conn.commit()
+        # investment_journal DDL 단일 정의는 create_tables에 유지한다(2026-09-20 S-5).
 
     def get_schedule_images(self, date_str):
         """해당 날짜 일정의 그림파일 경로 목록을 반환한다."""
@@ -393,17 +359,30 @@ class DBManager:
         return f"data/images/{dest.name}"
 
     def set_schedule(self, date_str, schedule, journal, images=None):
+        """일정/일지/그림 저장 (2026-09-20 S-4 단일 정의).
+
+        images=None  -> 기존 그림 유지("일정/일지만 저장" 버튼용)
+        images=list  -> 그림 목록 교체(빈 리스트면 초기화)
+        """
         cursor = self.conn.cursor()
-        images_json = "[]"
-        if images:
+        sched = str(schedule) if schedule is not None else ""
+        jrn = str(journal) if journal is not None else ""
+        if images is None:
+            cursor.execute(
+                "INSERT OR REPLACE INTO schedules (date, schedule, journal, schedule_images) "
+                "VALUES (?, ?, ?, "
+                "COALESCE((SELECT schedule_images FROM schedules WHERE date=?), '[]'))",
+                (str(date_str), sched, jrn, str(date_str))
+            )
+        else:
             try:
                 images_json = json.dumps(images, ensure_ascii=False)
             except (ValueError, TypeError):
                 images_json = "[]"
-        cursor.execute(
-            "INSERT OR REPLACE INTO schedules (date, schedule, journal, schedule_images) VALUES (?,?,?,?)",
-            (str(date_str), str(schedule) if schedule is not None else "", str(journal) if journal is not None else "", images_json)
-        )
+            cursor.execute(
+                "INSERT OR REPLACE INTO schedules (date, schedule, journal, schedule_images) VALUES (?,?,?,?)",
+                (str(date_str), sched, jrn, images_json)
+            )
         self.conn.commit()
 
     def get_schedule(self, date_str):
@@ -449,6 +428,16 @@ class DBManager:
             return df
         except sqlite3.Error: return None
 
+    @staticmethod
+    def parse_images_cell(value):
+        """내보낸 이미지 셀(세미콜론 구분 경로)을 경로 목록으로 복원한다."""
+        if value is None:
+            return []
+        if isinstance(value, (list, tuple)):
+            return [str(v).strip() for v in value if str(v).strip()]
+        parts = str(value).replace("\n", ";").split(";")
+        return [part.strip() for part in parts if part.strip()]
+
     # [추가] 외부 파일에서 가져오기한 일정 DataFrame을 DB에 반영
     def import_schedules_from_df(self, df):
         """날짜(필수), 일정, 저널, 이미지(선택) 컬럼을 읽어 일정을 병합한다."""
@@ -468,7 +457,8 @@ class DBManager:
                     continue
                 schedule = str(row.get("일정", "") or "")
                 journal = str(row.get("저널", "") or "")
-                self.set_schedule(date_str, schedule, journal)
+                images = self.parse_images_cell(row.get("이미지", ""))
+                self.set_schedule(date_str, schedule, journal, images=images)
                 imported += 1
             except (KeyError, ValueError, TypeError, AttributeError, sqlite3.Error) as e:
                 skipped += 1

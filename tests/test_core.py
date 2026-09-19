@@ -323,6 +323,41 @@ class TestScheduleExcelRoundTrip(unittest.TestCase):
         row = self.db.get_saved_stocks()[0]
         self.assertEqual(row["category"], "주식")
 
+    # ── Day 3 (2026-09-20): S-4 단일 정의 / S-5 DDL 중복 제거 / S-6 이미지 왕복 ──
+    def test_set_schedule_preserves_images_when_none(self):
+        """일정/일지만 저장 시 기존 그림은 유지되어야 한다(일간 일지 두 저장 버튼 semantics)."""
+        self.db.set_schedule("2099-04-01", "회의", "메모", images=["data/images/a.png"])
+        self.db.set_schedule("2099-04-01", "회의2", "메모2", images=None)
+        got = self.db.get_schedule("2099-04-01")
+        self.assertEqual(got["schedule"], "회의2")
+        self.assertEqual(got["images"], ["data/images/a.png"])
+
+    def test_set_schedule_replaces_images_when_given(self):
+        self.db.set_schedule("2099-04-02", "A", "", images=["data/images/old.png"])
+        self.db.set_schedule("2099-04-02", "B", "", images=["data/images/new.png"])
+        got = self.db.get_schedule("2099-04-02")
+        self.assertEqual(got["images"], ["data/images/new.png"])
+
+    def test_schedule_images_roundtrip_via_df(self):
+        """내보내기(세미콜론 구분) → 가져오기 후 get_schedule로 이미지 목록 복원."""
+        self.db.set_schedule("2099-04-03", "발표", "준비",
+                             images=["data/images/p1.png", "data/images/p2.png"])
+        df = self.db.get_all_schedules_with_images_df()
+        row = df[df["날짜"] == "2099-04-03"].iloc[0]
+        self.assertEqual(row["이미지"], "data/images/p1.png; data/images/p2.png")
+        res = self.db.import_schedules_from_df(df)
+        self.assertEqual(res, {"imported": len(df), "skipped": 0})
+        got = self.db.get_schedule("2099-04-03")
+        self.assertEqual(got["images"], ["data/images/p1.png", "data/images/p2.png"])
+
+    def test_single_set_schedule_and_ddl(self):
+        """S-4: set_schedule/get_schedule 단일 정의, S-5: investment_journal DDL 1회만."""
+        src = (Path(__file__).resolve().parent.parent / "core" / "db_manager.py").read_text(
+            encoding="utf-8")
+        self.assertEqual(src.count("def set_schedule("), 1)
+        self.assertEqual(src.count("def get_schedule("), 1)
+        self.assertEqual(src.count("CREATE TABLE IF NOT EXISTS investment_journal"), 1)
+
 
 def pytest_pd():
     import pandas as pd
