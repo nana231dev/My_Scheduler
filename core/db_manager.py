@@ -34,9 +34,41 @@ DDL_TASKS = '''
 '''
 
 
+# --- 기념일 시드 정정본 (2026-09-20 Day3 P1-2) ---
+# 구 시드 11행 중 8행의 명칭이 손상되어 있었다:
+#   1/1 '기념일'→'신정', 3/1 '3.1운동'→'삼일절', 5/5 '만일홍보절'→'어린이날',
+#   6/6 '어린이날'→'현충일', 8/15 '해방'→'광복절', 10/3 '개척절'→'개천절',
+#   10/9 '서방'→'한글날', 12/25 '크리스마스'→'기독탄신일'.
+# '근화절' 10/26은 폐기하고 '독도의 날' 10/25(기념일, is_holiday=0)를 신설한다.
+# 설날/추석(type=1, 음력)은 유지. 공휴일 10건 + 독도의 날 1건 = 11행.
+# 형식: (name, year, month, day, type, is_holiday, is_repeat)
+DEFAULT_ANNIVERSARIES = [
+    ("신정", 0, 1, 1, 0, 1, 1),
+    ("설날", 0, 1, 1, 1, 1, 1),
+    ("삼일절", 1919, 3, 1, 0, 1, 1),
+    ("어린이날", 0, 5, 5, 0, 1, 1),
+    ("현충일", 0, 6, 6, 0, 1, 1),
+    ("광복절", 1945, 8, 15, 0, 1, 1),
+    ("추석", 0, 8, 15, 1, 1, 1),
+    ("개천절", 0, 10, 3, 0, 1, 1),
+    ("한글날", 0, 10, 9, 0, 1, 1),
+    ("독도의 날", 0, 10, 25, 0, 0, 1),
+    ("기독탄신일", 0, 12, 25, 0, 1, 1),
+]
+
+# --- 구 기념일 시드 명칭 (마이그레이션 판별용, Day3 P1-2) ---
+# V1 시절 DB에 들어간 손상 명칭 집합. migrate_to_v2는 이 집합이
+# 하나라도 남아 있으면 "아직 정정되지 않은 DB"로 보고 재시드한다.
+LEGACY_ANNIVERSARY_NAMES = frozenset([
+    "기념일", "3.1운동", "만일홍보절",
+    "해방", "개척절", "서방",
+    "크리스마스", "근화절",
+])
+
+
 class DBManager:
-    # 스키마 버전: DDL/마이그레이션이 바뀔 때 올린다 (2026-09-20 P1-9 도입)
-    SCHEMA_VERSION = 1
+    # 스키마 버전: DDL/마이그레이션이 바뀔 때 올린다 (2026-09-20 P1-9 도입, Day3에서 2로 상향)
+    SCHEMA_VERSION = 2
 
     def __init__(self, db_name="scheduler.db"):
         self.conn = sqlite3.connect(db_name)
@@ -47,6 +79,7 @@ class DBManager:
         self.init_default_words()
         self.init_default_phrases()
         self.db_readonly = False
+        self.migrate_to_v2()  # Day3 P1-1/P1-2: 구 시드 정정 + wordbook 정규화 (멱등)
         self._init_schema_guard()
 
     def _init_schema_guard(self):
@@ -74,6 +107,74 @@ class DBManager:
             self.conn.execute("PRAGMA query_only = ON")
         except sqlite3.Error as e:
             log.error("읽기 전용 전환 실패: %s", e)
+
+    def migrate_to_v2(self):
+        """V1 → V2 마이그레이션 (2026-09-20 Day3 P1-1/P1-2, 멱등).
+
+        1. 기념일 재시드: 구 시드 명칭(LEGACY_ANNIVERSARY_NAMES)이 하나라도
+           남아 있으면, 사용자가 손댄 흔적이 없는 한(행 수 == 구 시드 11행)
+           DEFAULT_ANNIVERSARIES 정정본으로 교체한다. 사용자가 기념일을
+           추가·수정한 DB(행 수 다름, 손상 명칭 없음)에서는 재시드하지 않고
+           경고 로그만 남긴다. 빈 테이블이면 정정본으로 채운다.
+        2. wordbook 정규화: item_type이 '단어'/'숙어'가 아닌 모든 행
+           (과거 시드가 넣은 '동사'/'명사' 등, 또는 NULL)을 '단어'로 통일한 뒤
+           유니크 인덱스로 중복 차단을 보강한다. pos(품사) 컬럼은 손대지 않는다.
+        3. 두 단계 모두 2회 실행해도 변화가 없어야 한다(멱등).
+        """
+        cursor = self.conn.cursor()
+
+        # --- 1) 기념일 ---
+        try:
+            names = [r[0] for r in cursor.execute("SELECT name FROM anniversaries").fetchall()]
+        except sqlite3.Error as e:
+            log.error("기념일 마이그레이션 읽기 실패: %s", e)
+            return
+        has_legacy = bool(set(names) & set(LEGACY_ANNIVERSARY_NAMES))
+        if not names:
+            cursor.executemany(
+                "INSERT INTO anniversaries (name, year, month, day, type, is_holiday, is_repeat) "
+                "VALUES (?,?,?,?,?,?,?)", DEFAULT_ANNIVERSARIES)
+            self.conn.commit()
+            log.info("기념일 정정본 시드: %d건", len(DEFAULT_ANNIVERSARIES))
+        elif has_legacy and len(names) == 11:
+            cursor.execute("DELETE FROM anniversaries")
+            cursor.executemany(
+                "INSERT INTO anniversaries (name, year, month, day, type, is_holiday, is_repeat) "
+                "VALUES (?,?,?,?,?,?,?)", DEFAULT_ANNIVERSARIES)
+            self.conn.commit()
+            log.info("기념일 구 시드 11행을 정정본으로 교체했습니다.")
+        elif has_legacy:
+            log.warning("기념일에 구 시드 명칭이 있으나 사용자 추가분으로 보여 재시드하지 않습니다(%d행).", len(names))
+
+        # --- 2) wordbook item_type 정규화 ---
+        try:
+            cursor.execute(
+                "UPDATE wordbook SET item_type='단어' "
+                "WHERE item_type IS NULL OR item_type NOT IN ('단어','숙어')")
+            if cursor.rowcount:
+                log.info("wordbook item_type 정규화: %d행 → '단어'", cursor.rowcount)
+            self.conn.commit()
+        except sqlite3.Error as e:
+            log.error("wordbook 정규화 실패: %s", e)
+            return
+        try:
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wordbook_lang_word_item "
+                           "ON wordbook(language, word, item_type)")
+            self.conn.commit()
+        except sqlite3.IntegrityError as e:
+            log.warning("wordbook 유니크 인덱스 생성 실패(중복 정리 필요): %s", e)
+
+        # --- 3) 스키마 버전 스탬프 ---
+        # _init_schema_guard는 user_version==0일 때만 기록하므로, 기존 DB(V1=1)는
+        # 여기서 2로 올려야 한다. 낮을 때만 올린다(내림 금지).
+        try:
+            cur_ver = self.conn.execute("PRAGMA user_version").fetchone()[0]
+            if cur_ver < self.SCHEMA_VERSION:
+                self.conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                self.conn.commit()
+                log.info("스키마 버전 스탬프: %d → %d", cur_ver, self.SCHEMA_VERSION)
+        except sqlite3.Error as e:
+            log.error("스키마 버전 기록 실패: %s", e)
 
     def create_tables(self):
         cursor = self.conn.cursor()
@@ -291,23 +392,17 @@ class DBManager:
             self.conn.commit()
 
     def check_default_anniversaries(self):
+        # 기념일 시드 정정본 (2026-09-20 Day3 P1-2: 8종 손상 명칭 복원).
+        # 잘못 들어가 있던 구 시드('기념일' 1/1, '3.1운동', '만일홍보절' 5/5,
+        # '어린이날' 6/6, '해방' 8/15, '개척절' 10/3, '서방' 10/9,
+        # '크리스마스', '근화절' 10/26)는 1/1·8/15 더미/'3.1운동' 표기 손상이다.
+        # 수정 시 SCHEMA_VERSION을 올리고(V2), migrate_to_v2가 재시드한다.
         cursor = self.conn.cursor()
         cursor.execute("SELECT count(*) FROM anniversaries")
         if cursor.fetchone()[0] == 0:
-            defaults = [
-                ("기념일", 0, 1, 1, 0, 1, 1),
-                ("3.1운동", 1919, 3, 1, 0, 1, 1),
-                ("만일홍보절", 0, 5, 5, 0, 1, 1),
-                ("어린이날", 0, 6, 6, 0, 1, 1),
-                ("해방", 1945, 8, 15, 0, 1, 1),
-                ("개척절", 0, 10, 3, 0, 1, 1),
-                ("서방", 0, 10, 9, 0, 1, 1),
-                ("크리스마스", 0, 12, 25, 0, 1, 1),
-                ("설날", 0, 1, 1, 1, 1, 1),
-                ("근화절", 0, 10, 26, 0, 1, 1),
-                ("추석", 0, 8, 15, 1, 1, 1)
-            ]
-            cursor.executemany("INSERT INTO anniversaries (name, year, month, day, type, is_holiday, is_repeat) VALUES (?,?,?,?,?,?,?)", defaults)
+            cursor.executemany(
+                "INSERT INTO anniversaries (name, year, month, day, type, is_holiday, is_repeat) "
+                "VALUES (?,?,?,?,?,?,?)", DEFAULT_ANNIVERSARIES)
             self.conn.commit()
 
     def get_anniversaries(self):

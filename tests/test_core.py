@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core import exceptions as ex  # noqa: E402
 from core import formulas, glossary, i18n, logger  # noqa: E402
-from core.db_manager import DBManager  # noqa: E402
+from core.db_manager import DBManager, DEFAULT_ANNIVERSARIES  # noqa: E402
 
 
 # ── I18n ─────────────────────────────────────────────────────
@@ -500,6 +500,97 @@ class TestSchemaHealth(unittest.TestCase):
         # 실제로 쓰기도 가능해야 한다(query_only 미설정)
         self.db.add_task("쓰기 확인", "", "", "", "")
         self.assertEqual(len(self.db.get_tasks()), 1)
+
+
+# ── Day3 스키마 확정 (2026-09-20 P1-1/P1-2) ───────────────────
+class TestV2Migration(unittest.TestCase):
+    """기념일 정정본 재시드 + wordbook 정규화가 멱등하게 동작하는지 검증한다."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = DBManager(db_name=str(Path(self._tmp.name) / "v2.db"))
+        self.cur = self.db.conn.cursor()
+
+    def tearDown(self):
+        self.db.conn.close()
+        self._tmp.cleanup()
+
+    def test_anniversary_seed_is_corrected(self):
+        rows = self.cur.execute(
+            "SELECT name, year, month, day, type, is_holiday FROM anniversaries "
+            "ORDER BY month, day").fetchall()
+        self.assertEqual(len(rows), 11)
+        by_name = {r[0]: r for r in rows}
+        # 손상 명칭이 하나도 남아 있지 않아야 한다
+        for bad in ("기념일", "3.1운동", "만일홍보절", "해방", "개척절", "서방", "크리스마스", "근화절"):
+            self.assertNotIn(bad, by_name)
+        # 정정본 11건이 날짜·속성과 함께 정확해야 한다
+        for name, year, month, day, typ, hol, _rep in DEFAULT_ANNIVERSARIES:
+            self.assertIn(name, by_name)
+            self.assertEqual(by_name[name][1:], (year, month, day, typ, hol))
+        # 공휴일 10건 + 독도의 날(비공휴일) 1건
+        self.assertEqual(self.cur.execute(
+            "SELECT COUNT(*) FROM anniversaries WHERE is_holiday=1").fetchone()[0], 10)
+        self.assertEqual(by_name["독도의 날"][1:], (0, 10, 25, 0, 0))
+
+    def test_anniversary_seed_matches_month_day_type_uniqueness(self):
+        dupes = self.cur.execute(
+            "SELECT month, day, type, COUNT(*) FROM anniversaries "
+            "GROUP BY month, day, type HAVING COUNT(*) > 1").fetchall()
+        self.assertEqual(dupes, [])
+
+    def test_legacy_anniversaries_are_replaced(self):
+        # 구 시드 상태의 DB를 재현: 손상 명칭 11행 + wordbook 구 값
+        self.cur.execute("DELETE FROM anniversaries")
+        self.cur.executemany(
+            "INSERT INTO anniversaries (name, year, month, day, type, is_holiday, is_repeat) "
+            "VALUES (?,?,?,?,?,?,?)",
+            [("기념일", 0, 1, 1, 0, 1, 1), ("3.1운동", 1919, 3, 1, 0, 1, 1),
+             ("만일홍보절", 0, 5, 5, 0, 1, 1), ("어린이날", 0, 6, 6, 0, 1, 1),
+             ("해방", 1945, 8, 15, 0, 1, 1), ("개척절", 0, 10, 3, 0, 1, 1),
+             ("서방", 0, 10, 9, 0, 1, 1), ("크리스마스", 0, 12, 25, 0, 1, 1),
+             ("설날", 0, 1, 1, 1, 1, 1), ("근화절", 0, 10, 26, 0, 1, 1),
+             ("추석", 0, 8, 15, 1, 1, 1)])
+        self.db.conn.commit()
+        self.db.migrate_to_v2()
+        names = sorted(r[0] for r in self.cur.execute("SELECT name FROM anniversaries").fetchall())
+        self.assertEqual(len(names), 11)
+        self.assertIn("신정", names)
+        self.assertIn("독도의 날", names)
+        self.assertNotIn("만일홍보절", names)
+
+    def test_user_added_anniversaries_are_preserved(self):
+        # 사용자가 기념일을 추가한 DB에서는 재시드하지 않는다
+        self.db.add_anniversary("결혼기념일", 2020, 4, 4, 0, 0, 1)
+        before = sorted(self.cur.execute("SELECT name FROM anniversaries").fetchall())
+        self.db.migrate_to_v2()
+        after = sorted(self.cur.execute("SELECT name FROM anniversaries").fetchall())
+        self.assertEqual(before, after)
+        self.assertIn(("결혼기념일",), after)
+
+    def test_wordbook_legacy_pos_values_normalized(self):
+        # 과거 시드가 item_type에 품사를 넣은 상태를 재현
+        self.cur.execute("UPDATE wordbook SET item_type='동사'")
+        self.db.conn.commit()
+        self.db.migrate_to_v2()
+        types = self.cur.execute("SELECT DISTINCT item_type FROM wordbook").fetchall()
+        self.assertEqual(types, [("단어",)])
+        # pos(품사) 컬럼은 그대로 보존되어야 한다
+        self.assertTrue(self.cur.execute(
+            "SELECT COUNT(*) FROM wordbook WHERE pos='동사'").fetchone()[0] > 0)
+
+    def test_v2_migration_is_idempotent(self):
+        snap_ann = self.cur.execute("SELECT * FROM anniversaries ORDER BY id").fetchall()
+        snap_wb = self.cur.execute("SELECT * FROM wordbook ORDER BY id").fetchall()
+        self.db.migrate_to_v2()
+        self.db.migrate_to_v2()
+        self.assertEqual(snap_ann, self.cur.execute("SELECT * FROM anniversaries ORDER BY id").fetchall())
+        self.assertEqual(snap_wb, self.cur.execute("SELECT * FROM wordbook ORDER BY id").fetchall())
+
+    def test_schema_version_stamped_to_v2(self):
+        self.assertEqual(self.cur.execute("PRAGMA user_version").fetchone()[0],
+                         DBManager.SCHEMA_VERSION)
+        self.assertGreaterEqual(DBManager.SCHEMA_VERSION, 2)
 
 
 # ── 로그 인증키 마스킹 (2026-09-20 P0-6) ─────────────────────
