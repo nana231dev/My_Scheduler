@@ -11,6 +11,7 @@ import logging  # noqa: E402
 import sys
 import tempfile
 import unittest
+from logging.handlers import RotatingFileHandler  # noqa: E402
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -489,6 +490,48 @@ class TestSchemaHealth(unittest.TestCase):
         self.assertTrue(self.db.add_word("검증어", 3, "alpha", "/a/", "알파", "명사", "숙어 뜻", "ex", "예",
                                          item_type="숙어"))
         self.assertEqual(len(self.db.get_words(language="검증어")), 2)
+
+    def test_user_version_is_recorded(self):
+        got = self.cur.execute("PRAGMA user_version").fetchone()[0]
+        self.assertEqual(got, DBManager.SCHEMA_VERSION)
+
+    def test_integrity_ok_leaves_db_writable(self):
+        self.assertFalse(self.db.db_readonly)
+        # 실제로 쓰기도 가능해야 한다(query_only 미설정)
+        self.db.add_task("쓰기 확인", "", "", "", "")
+        self.assertEqual(len(self.db.get_tasks()), 1)
+
+
+# ── 로그 인증키 마스킹 (2026-09-20 P0-6) ─────────────────────
+class TestSecretMasking(unittest.TestCase):
+    def test_mask_secrets_service_key(self):
+        url = "https://apis.data.go.kr/x?serviceKey=SECRET123&likeItmsNm=%EC%82%BC%EC%84%B1&beginBasDt=20260820"
+        got = logger.mask_secrets(url)
+        self.assertIn("serviceKey=***", got)
+        self.assertNotIn("SECRET123", got)
+        self.assertIn("likeItmsNm=%EC%82%BC%EC%84%B1", got)   # 다른 파라미터는 보존
+
+    def test_mask_secrets_crt_id(self):
+        self.assertEqual(logger.mask_secrets("http://x/y.jsp?crtId=KEY&c=1"),
+                         "http://x/y.jsp?crtId=***&c=1")
+
+    def test_mask_secrets_keeps_plain_text(self):
+        self.assertEqual(logger.mask_secrets("일반 메시지"), "일반 메시지")
+
+    def test_setup_logging_handlers_have_masking_filter(self):
+        logger.setup_logging()
+        root = logging.getLogger()
+        handlers = [h for h in root.handlers if isinstance(h, (logging.StreamHandler, RotatingFileHandler))]
+        self.assertTrue(handlers)
+        for h in handlers:
+            self.assertTrue(any(isinstance(f, logger.SecretMaskingFilter) for f in h.filters), h)
+
+    def test_filter_masks_record_with_args(self):
+        rec = logging.LogRecord("t", logging.INFO, "p", 1,
+                                "요청: %s", ("https://x?serviceKey=SECRET&a=1",), None)
+        logger.SecretMaskingFilter().filter(rec)
+        self.assertEqual(rec.msg, "요청: https://x?serviceKey=***&a=1")
+        self.assertIsNone(rec.args)
 
 
 if __name__ == "__main__":

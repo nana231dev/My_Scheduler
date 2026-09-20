@@ -35,6 +35,9 @@ DDL_TASKS = '''
 
 
 class DBManager:
+    # 스키마 버전: DDL/마이그레이션이 바뀔 때 올린다 (2026-09-20 P1-9 도입)
+    SCHEMA_VERSION = 1
+
     def __init__(self, db_name="scheduler.db"):
         self.conn = sqlite3.connect(db_name)
         self.create_tables()
@@ -43,6 +46,34 @@ class DBManager:
         self.check_default_categories()
         self.init_default_words()
         self.init_default_phrases()
+        self.db_readonly = False
+        self._init_schema_guard()
+
+    def _init_schema_guard(self):
+        """시작 시 무결성을 검사하고 실패 시 읽기 전용 모드로 전환한다 (2026-09-20 P1-9/R-4).
+
+        - user_version: 0이면 SCHEMA_VERSION을 기록해 스키마 버전을 추적한다.
+        - integrity_check: 'ok'가 아니면 추가 파괴를 막기 위해
+          db_readonly=True + PRAGMA query_only=ON 으로 전환한다(기록은 app.log).
+        """
+        try:
+            if self.conn.execute("PRAGMA user_version").fetchone()[0] == 0:
+                self.conn.execute(f"PRAGMA user_version = {self.SCHEMA_VERSION}")
+                self.conn.commit()
+            result = self.conn.execute("PRAGMA integrity_check").fetchone()[0]
+        except sqlite3.Error as e:
+            log.error("DB 무결성 검사 실행 실패: %s", e)
+            self.db_readonly = True
+            return
+        if result == "ok":
+            self.db_readonly = False
+            return
+        log.error("DB 무결성 검사 실패: %s — 읽기 전용 모드로 전환합니다. 백업 후 복구하세요.", result)
+        self.db_readonly = True
+        try:
+            self.conn.execute("PRAGMA query_only = ON")
+        except sqlite3.Error as e:
+            log.error("읽기 전용 전환 실패: %s", e)
 
     def create_tables(self):
         cursor = self.conn.cursor()

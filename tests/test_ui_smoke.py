@@ -68,10 +68,22 @@ class TestUISmoke(unittest.TestCase):
         for view in self.VIEWS:
             self.app.switch_view(view)
             self.app.update_idletasks()
+            # P0-4: 어떤 뷰도 오류 안내 라벨을 띄우면 안 된다(예외 격리 통과)
+            self.assertIsNone(getattr(self.app, "_view_error_lbl", None), view)
         # re-entering a view must not duplicate widgets (switch_view clears first)
         self.app.switch_view("market")
         self.app.switch_view("market")
         self.assertTrue(self.app.content_area.winfo_children())
+
+    def test_view_error_is_isolated_and_reported(self):
+        """뷰 생성 중 예외가 나도 앱은 죽지 않고 오류 라벨로 안내한다(P0-4)."""
+        with mock.patch.object(type(self.app), "setup_settings_view",
+                               side_effect=RuntimeError("고의 실패")):
+            self.app.switch_view("settings")   # 예외가 밖으로 나오면 안 된다
+        lbl = getattr(self.app, "_view_error_lbl", None)
+        self.assertIsNotNone(lbl)
+        self.assertIn("settings", lbl.cget("text"))
+        self.assertIn("오류가 발생", lbl.cget("text"))
 
     def test_market_widgets_present(self):
         self.app.switch_view("market")

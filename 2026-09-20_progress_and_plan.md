@@ -661,7 +661,7 @@ git status --short ; git log --all --oneline -- "*.db"
 | Day | 목표 | 작업(체크리스트 요약) | 검증 |
 |---|---|---|---|
 | **Day 1**<br>09-20(일)<br>✅ **완료** | 기반 복구<br>(P0-2/P0-3) | ①베이스라인 백업 ②`tasks` DDL 단일 정의 + 누락 테이블 자기치유 ③중복 import 제거 ④회귀 테스트 5건 | **`Ran 53 tests — OK`**, `py_compile 25/25`, 실 DB에 `tasks` 6컬럼 확인 |
-| **Day 2**<br>09-21(월) | 안전장치<br>(P0-1/P0-4/P0-6/P1-9) | ①시작 시 자동 백업(7개 회전)+마지막 백업 라벨 ②`switch_view` 예외 격리 ③로그 `serviceKey` 마스킹 ④`user_version=1`+`integrity_check` 게이트 | `backup/` 파일 생성·회전, 오류 라벨 미표시, 로그 `serviceKey=***` |
+| **Day 2**<br>09-20(일)<br>✅ **완료** | 안전장치<br>(P0-1/P0-4/P0-6/P1-9) | ①시작 시 자동 백업(일 1회, 7개 회전)+설정 화면 "마지막 백업" 라벨·경고 ②`switch_view` 예외 격리(오류 라벨+`log.exception`) ③로그 인증키 마스킹(`SecretMaskingFilter` — 모든 핸들러) ④`user_version=1`+`integrity_check` 실패 시 읽기 전용 게이트 | 실측: `backup/scheduler_20260920.db` 자동 생성, `user_version=1`, app.log에 `serviceKey=***`(`61 tests OK`) |
 | **Day 3**<br>09-22(화) | 스키마 확정<br>(P1-1/P1-2) | ①기념일 시드 정정(12건) 후 재시드 ②(✅09-20 선반영) `wordbook` DDL·`add_word`·시드 조건 교정 → **남은 것: 기존 340행 `item_type` 정규화**(실측: `동사` 338 + `명사` 2 → `'단어'`) ③시드/마이그레이션 멱등 테스트 | 기념일 12건·공휴일 플래그 정확, 단어 중복 0, 2회 실행 시 변화 0 |
 | **Day 4**<br>09-23(수) | 재입력 도구<br>(P0-5 연계) | ①`Temp/make_schedule_template.py`(엑셀 템플릿) ②고아 이미지 2건 재연결 ③재입력 1차(일정·D-Day) ④증권 CRUD 재검증 | 템플릿→가져오기 왕복 건수 일치, 저장목록 CRUD 예외 0 |
 | **Day 5**<br>09-24(목) | 학습<br>(P1-3/P1-4) | ①진도율 위젯 ②`study_progress` 실사용 경로 ③`study_subject_data` 연결/제거 결정 | 진도 입력→재시작 후 유지, 진도율 % = DB 집계 |
@@ -669,6 +669,8 @@ git status --short ; git log --all --oneline -- "*.db"
 | **Day 7**<br>09-26(토) | 회귀·릴리스<br>(P1-8/G-1/G-2) | ①`unittest`+스모크+`probe_state`+`moji_probe` ②수동 시나리오 6종 ③문서 갱신 ④`git tag v1.1` | `Temp/regression_0926.json`, 태그 푸시 완료 |
 
 > Day 6까지 P1을 다 못 끝내면 **가계부(P1-7)와 1000단어 완성(P1-5 확장)은 다음 사이클로 넘긴다.** 릴리스(Day 7)는 미루지 않는다.
+
+> **Day 1~2 실측 결과(2026-09-20)**: 테스트 48 → **61건 전부 OK**, `py_compile 25/25 OK`, 실 DB에 `tasks` 6컬럼 + `user_version=1`, `backup/`에 자동 백업(`scheduler_20260920.db`)+베이스라인 동결본, app.log 마스킹 실기록 확인. 다음 착수는 **Day 3(스키마 확정)**.
 
 ### 12-4. 데이터 재입력 로드맵 (과거 수치를 목표로 삼지 않는다)
 

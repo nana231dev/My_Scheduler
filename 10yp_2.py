@@ -50,9 +50,10 @@ LBLUE_FG = {
 from core.solar_terms import SolarTerms
 from core.db_manager import DBManager
 from core.market_fetcher import MarketFetcher
-from core.logger import setup_logging
+from core.logger import get_logger, setup_logging
 
 setup_logging()  # 모든 core 모듈 print → logging (archive/logs/app.log)
+log = get_logger(__name__)
 from core.exceptions import handle_error  # noqa: E402
 from core.i18n import t as i18n_t  # noqa: E402
 from core import formulas as formulas_lib
@@ -88,6 +89,7 @@ class SchedulerApp(ttk.Window):
         self.geometry("1600x950")
         
         self.db = DBManager()
+        self._auto_backup_on_start()   # 시작 시 일 1회 자동 백업 (2026-09-20 P0-1)
         self.lunar = KoreanLunarCalendar()
         self.solar_term = SolarTerms()
         # 금융원 OpenAPI 인증키: config.json에서 로드, 없으면 빈 문자열(Mock 모드)
@@ -411,26 +413,39 @@ class SchedulerApp(ttk.Window):
         for widget in self.content_area.winfo_children():
             widget.destroy()
 
-        self.update_sidebar_summary()
+        try:
+            self.update_sidebar_summary()
+        except Exception as e:  # noqa: BLE001 - 사이드바 실패가 뷰 전환을 막지 않게 한다(P0-4)
+            log.exception("[사이드바] 요약 갱신 실패: %s", e)
 
-        if view_name == "monthly":
-            self.setup_monthly_view()
-        elif view_name == "weekly":
-            self.setup_weekly_view()
-        elif view_name == "daily":
-            self.setup_daily_view()
-        elif view_name == "report":
-            self.setup_report_view()
-        elif view_name == "study":
-            self.setup_study_view()
-        elif view_name == "news":
-            self.setup_news_view()
-        elif view_name == "market":
-            self.setup_market_view()
-        elif view_name == "ledger":
-            self.setup_ledger_view()
-        elif view_name == "settings":
-            self.setup_settings_view()
+        builders = {
+            "monthly": self.setup_monthly_view,
+            "weekly": self.setup_weekly_view,
+            "daily": self.setup_daily_view,
+            "report": self.setup_report_view,
+            "study": self.setup_study_view,
+            "news": self.setup_news_view,
+            "market": self.setup_market_view,
+            "ledger": self.setup_ledger_view,
+            "settings": self.setup_settings_view,
+        }
+        builder = builders.get(view_name)
+        if builder is None:
+            return
+
+        try:
+            builder()
+            self._view_error_lbl = None
+        except Exception as e:  # noqa: BLE001 - 한 뷰의 오류가 앱 전체를 죽이지 않게 격리한다(P0-4)
+            log.exception("[%s] 뷰 생성 실패: %s", view_name, e)
+            self._view_error_lbl = ttk.Label(
+                self.content_area,
+                text=(f"⚠️ '{view_name}' 화면을 여는 중 오류가 발생했습니다.\n"
+                      f"{type(e).__name__}: {e}\n"
+                      "상세 내용은 archive/logs/app.log 에 기록되었습니다."),
+                bootstyle="danger", padding=20, justify="left",
+            )
+            self._view_error_lbl.pack(fill=BOTH, expand=YES, padx=20, pady=20)
     
     # -------------------------------------------------------------
     # 뷰: 공식집 (수학/과학 160공식) — 재구축 2026-09-12
@@ -3434,6 +3449,9 @@ class SchedulerApp(ttk.Window):
         bak_btn.pack(fill=X, pady=(6, 0))
         ttk.Button(bak_btn, text="💾 지금 백업", command=self._backup_data, bootstyle="success").pack(side=LEFT, padx=(0, 8))
         ttk.Button(bak_btn, text="↩ 백업 파일에서 복원", command=self._restore_data, bootstyle="warning-outline").pack(side=LEFT)
+        # 마지막 백업 상태 표시 (2026-09-20 P0-1): 백업이 없으면 경고를 상시 노출한다.
+        self.bak_last_lbl = ttk.Label(bak_frame, text=self._backup_label_text(), bootstyle="secondary")
+        self.bak_last_lbl.pack(anchor="w", pady=(8, 0))
 
         # 2. 기념일 관리
         ann_frame = ttk.Labelframe(scroll_frame, text=" 기념일 관리 ", padding=15)
@@ -3660,9 +3678,90 @@ class SchedulerApp(ttk.Window):
                     messagebox.showerror("백업 실패", f"{src} 복사 중 오류:\n{e}")
                     return
         if saved:
+            if hasattr(self, "bak_last_lbl"):
+                self.bak_last_lbl.config(text=self._backup_label_text())
             messagebox.showinfo("백업 완료", "backup/ 폴더에 저장했습니다:\n" + "\n".join(saved))
         else:
             messagebox.showwarning("백업 실패", "백업할 파일(scheduler.db, config.json)을 찾지 못했습니다.")
+
+    # --- 시작 시 자동 백업 (2026-09-20 P0-1 / R-1) ---
+    BACKUP_KEEP = 7   # 보관 개수
+
+    def _auto_backup_on_start(self):
+        """앱 시작 시 오늘 날짜 백업이 없으면 생성한다(일 1회). 실패해도 앱은 계속 뜬다."""
+        try:
+            saved = self._run_backup(daily=True)
+            if saved:
+                log.info("[백업] 시작 자동 백업 완료: %s", ", ".join(saved))
+        except Exception as e:  # noqa: BLE001 - 백업 실패가 앱 기동을 막지 않게 한다
+            log.warning("[백업] 시작 자동 백업 중 오류: %s", e)
+
+    def _run_backup(self, daily=True):
+        """scheduler.db + config.json을 backup/에 복사한다.
+
+        daily=True면 오늘 날짜 백업이 이미 있으면 복사를 건너뛴다(일 1회).
+        반환: 확보된 백업 파일명 목록(실패 시 빈 목록, 원인은 로그로 남긴다).
+        """
+        import shutil
+        try:
+            bak_dir = Path("backup")
+            bak_dir.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d")
+            saved = []
+            for src in ("scheduler.db", "config.json"):
+                if not os.path.exists(src):
+                    continue
+                dst = bak_dir / f"{Path(src).stem}_{stamp}{Path(src).suffix}"
+                if daily and dst.exists():
+                    saved.append(dst.name)
+                    continue
+                shutil.copy2(src, dst)
+                saved.append(dst.name)
+            if saved:
+                self._rotate_backups(bak_dir)
+            return saved
+        except (OSError, shutil.Error) as e:
+            log.warning("[백업] 자동 백업 실패: %s", e)
+            return []
+
+    def _rotate_backups(self, bak_dir: Path, keep: int = BACKUP_KEEP):
+        """타임스탬프 백업 사본을 최근 keep개만 남긴다(baseline 등 다른 이름은 보존)."""
+        import re
+        for prefix, suffix in (("scheduler_", ".db"), ("config_", ".json")):
+            pattern = re.compile(rf"^{prefix}\d{{8}}(?:_\d{{6}})?{re.escape(suffix)}$")
+            try:
+                files = sorted(
+                    (p for p in bak_dir.iterdir() if pattern.match(p.name)),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+            except OSError as e:
+                log.warning("[백업] 회전 목록 조회 실패: %s", e)
+                continue
+            for old in files[keep:]:
+                try:
+                    old.unlink()
+                except OSError as e:
+                    log.warning("[백업] 오래된 백업 삭제 실패: %s", e)
+
+    def _last_backup_info(self):
+        """backup/에서 가장 최근 scheduler_*.db의 (이름, 수정시각)을 반환. 없으면 None."""
+        bak_dir = Path("backup")
+        if not bak_dir.is_dir():
+            return None
+        try:
+            cands = sorted(bak_dir.glob("scheduler_*.db"),
+                           key=lambda p: p.stat().st_mtime, reverse=True)
+            if not cands:
+                return None
+            newest = cands[0]
+            return newest.name, datetime.fromtimestamp(newest.stat().st_mtime)
+        except (OSError, ValueError):
+            return None
+
+    def _backup_label_text(self):
+        info = self._last_backup_info()
+        if not info:
+            return "⚠️ 백업 기록이 없습니다 — '💾 지금 백업'을 눌러 데이터를 보호하세요."
+        return f"마지막 백업: {info[1]:%Y-%m-%d %H:%M}  ({info[0]})"
 
     def _restore_data(self):
         """backup/ 폴더의 백업 파일을 선택해 scheduler.db 또는 config.json 복원"""
