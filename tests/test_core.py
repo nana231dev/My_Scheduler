@@ -389,6 +389,36 @@ class TestSavedStocks(unittest.TestCase):
         self.db.delete_saved_stock(sid)
         self.assertEqual(self.db.get_saved_stocks(), [])
 
+    def test_saved_stock_duplicate_is_blocked(self):
+        """Day4 P0-5: 같은 symbol 재저장은 False (symbol UNIQUE 보장)."""
+        self.assertTrue(self.db.add_saved_stock("005930", "삼성전자", 75000))
+        self.assertFalse(self.db.add_saved_stock("005930", "삼성전자", 75000))
+        self.assertEqual(len(self.db.get_saved_stocks()), 1)
+
+    def test_schedule_template_roundtrip_with_images(self):
+        """Day4 P0-5: 템플릿 컬럼 규격 → 가져오기 → 내보내기 이미지 복원."""
+        import pandas as pd
+        tpl = pd.DataFrame(
+            [{"날짜": "2099-09-19", "일정": "템플릿 검증", "저널": "메모",
+              "이미지": "data/images/a.png; data/images/b.png"}],
+            columns=["날짜", "일정", "저널", "이미지"])
+        res = self.db.import_schedules_from_df(tpl)
+        self.assertEqual(res, {"imported": 1, "skipped": 0})
+        out = self.db.get_all_schedules_with_images_df()
+        row = out[out["날짜"] == "2099-09-19"].iloc[0]
+        self.assertEqual(row["이미지"], "data/images/a.png; data/images/b.png")
+        got = self.db.get_schedule("2099-09-19")
+        self.assertEqual(got["images"], ["data/images/a.png", "data/images/b.png"])
+
+    def test_dday_crud_roundtrip(self):
+        """Day4: D-Day 재입력 경로(추가 → 조회 → 삭제) 검증."""
+        self.db.add_dday("검증 디데이", "2099-12-31")
+        rows = self.db.get_ddays()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["title"], "검증 디데이")
+        self.db.delete_dday(rows[0]["id"])
+        self.assertEqual(self.db.get_ddays(), [])
+
 
 # ── 증권 유틸/검색 (2026-09-14 확장) ─────────────────────────
 from core.market_fetcher import (  # noqa: E402

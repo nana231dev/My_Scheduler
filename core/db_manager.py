@@ -205,11 +205,15 @@ class DBManager:
         cursor.execute(DDL_TASKS)
 
         # --- 저장 종목 전용 테이블(Market tab 사용) ---
+        # symbol UNIQUE: 같은 종목의 중복 저장을 DB 차원에서 차단한다
+        # (2026-09-20 Day4 P0-5: add_saved_stock의 "중복이면 False" docstring을 보장).
+        # 구버전 DB 마이그레이션: 이미 중복 행이 있으면 살려두고 인덱스만 건너뛴다
+        # (앱 기동 보장, 중복 정리 후 재실행하면 생성됨).
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS saved_markets (
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 rank          INTEGER,
-                symbol        TEXT,
+                symbol        TEXT UNIQUE,
                 name          TEXT,
                 price         REAL,
                 change_amount REAL,
@@ -218,6 +222,11 @@ class DBManager:
                 saved_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        try:
+            cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_markets_symbol "
+                           "ON saved_markets(symbol)")
+        except sqlite3.IntegrityError as e:
+            log.warning("saved_markets 유니크 인덱스 생성 실패(중복 정리 필요): %s", e)
 
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS ddays (
