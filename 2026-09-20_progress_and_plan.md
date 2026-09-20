@@ -389,8 +389,8 @@ python -c "import glob,py_compile;fs=[f for f in glob.glob('*.py')+glob.glob('co
 
 | ID | 영역 | 내용 |
 |---|---|---|
-| **P1-1** | 데이터 | `wordbook.item_type` 정책 확정(채택/폐기) + UNIQUE 제약 정상화 |
-| **P1-2** | 데이터 | 기념일 명칭 5건 교정 마이그레이션(사전 백업) |
+| **P1-1** | 데이터 | ✅ 완료(Day3) `wordbook.item_type` 정규화 + UNIQUE 인덱스 + `SCHEMA_VERSION=2` |
+| **P1-2** | 데이터 | ✅ 완료(Day3) 기념일 정정본 11건 재시드(사전 백업 후 `migrate_to_v2`) |
 | **P1-3** | 학습 | 진도율 위젯 + `study_progress` 실사용 경로 확보 |
 | **P1-4** | 학습 | `study_subject_data` 연결 또는 제거 결정 |
 | **P1-5** | 학습 | 1000단어 CSV 품질 게이트 + 임포터(임시 DB 검증 → 실 DB 반영) |
