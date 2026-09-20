@@ -424,5 +424,72 @@ class TestMarketUtils(unittest.TestCase):
         self.assertEqual(len(items), 5)
 
 
+# ── 스키마 건강성 (2026-09-20 P0-2/P0-3) ─────────────────────
+class TestSchemaHealth(unittest.TestCase):
+    """DB가 재생성되거나 테이블이 사라져도 앱이 뜨는지 검증한다.
+
+    배경: 2026-09-19 DB 재생성으로 tasks 테이블이 사라져
+    설정 뷰(`setup_settings_view → refresh_task_list → get_tasks`)가
+    'sqlite3.OperationalError: no such table: tasks'로 중단되었다.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = DBManager(db_name=str(Path(self._tmp.name) / "schema.db"))
+        self.cur = self.db.conn.cursor()
+
+    def tearDown(self):
+        self.db.conn.close()
+        self._tmp.cleanup()
+
+    def _columns(self, table):
+        return [r[1] for r in self.cur.execute(f"PRAGMA table_info({table})").fetchall()]
+
+    def _tables(self):
+        return sorted(r[0] for r in self.cur.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'").fetchall())
+
+    def test_tasks_table_has_6_columns(self):
+        self.assertEqual(self._columns("tasks"),
+                         ["id", "item", "period", "goal", "content", "remark"])
+
+    def test_tasks_crud_roundtrip(self):
+        self.db.add_task("영어 100단어", "2026-09-20", "매일 30분", "1회독", "메모")
+        rows = self.db.get_tasks()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["item"], "영어 100단어")
+        self.assertEqual(rows[0]["remark"], "메모")
+        self.db.delete_task(rows[0]["id"])
+        self.assertEqual(self.db.get_tasks(), [])
+
+    def test_tasks_self_heal_when_table_missing(self):
+        self.cur.execute("DROP TABLE tasks")
+        self.db.conn.commit()
+        self.assertNotIn("tasks", self._tables())
+        self.db.ensure_schedule_tables()            # 자기치유
+        self.assertIn("tasks", self._tables())
+        self.db.add_task("복구 확인", "", "", "", "")   # 사용 가능해야 한다
+        self.assertEqual(len(self.db.get_tasks()), 1)
+
+    def test_migration_is_idempotent(self):
+        before_tables, before_cols = self._tables(), self._columns("wordbook")
+        self.db.ensure_schedule_tables()
+        self.db.ensure_schedule_tables()
+        self.assertEqual(before_tables, self._tables())
+        self.assertEqual(before_cols, self._columns("wordbook"))
+
+    def test_wordbook_item_type_default_and_dedup(self):
+        self.db.add_word("검증어", 1, "alpha", "/a/", "알파", "명사", "첫째 뜻", "ex", "예")
+        words = self.db.get_words(language="검증어")
+        self.assertEqual(words[0]["item_type"], "단어")     # 기본값이 기록된다
+        # 같은 (언어, 단어, 유형) 재삽입은 차단
+        self.assertFalse(self.db.add_word("검증어", 2, "alpha", "/a/", "알파", "명사", "둘째 뜻", "ex", "예"))
+        self.assertEqual(len(self.db.get_words(language="검증어")), 1)
+        # 유형이 다르면 별개 항목으로 저장 가능
+        self.assertTrue(self.db.add_word("검증어", 3, "alpha", "/a/", "알파", "명사", "숙어 뜻", "ex", "예",
+                                         item_type="숙어"))
+        self.assertEqual(len(self.db.get_words(language="검증어")), 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -9,6 +9,8 @@ from tkinter import messagebox
 
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import BOTH, YES, HORIZONTAL
+from tkinter.constants import X, Y, LEFT, RIGHT, TOP, BOTTOM
+
 
 try:
     from ttkbootstrap.widgets import ToastNotification

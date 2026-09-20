@@ -18,6 +18,22 @@ from core.logger import get_logger
 log = get_logger(__name__)
 
 
+# --- tasks(목표/To-Do) DDL: create_tables와 ensure_schedule_tables가 공유하는 단일 정의 ---
+# 2026-09-20 (D-2): 이 DDL이 통째로 누락되어, DB 재생성 후 설정 탭이
+# 'sqlite3.OperationalError: no such table: tasks'로 열리지 않았다.
+# 중복 정의를 만들지 말 것(S-5 교훈: DDL은 한 곳에서만 관리한다).
+DDL_TASKS = '''
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        item TEXT,
+        period TEXT,
+        goal TEXT,
+        content TEXT,
+        remark TEXT
+    )
+'''
+
+
 class DBManager:
     def __init__(self, db_name="scheduler.db"):
         self.conn = sqlite3.connect(db_name)
@@ -52,6 +68,9 @@ class DBManager:
                 is_repeat INTEGER DEFAULT 1
             )
                 ''')
+
+        # --- 목표/To-Do (DDL 단일 정의: DDL_TASKS) ---
+        cursor.execute(DDL_TASKS)
 
         # --- 저장 종목 전용 테이블(Market tab 사용) ---
         cursor.execute('''
@@ -114,6 +133,8 @@ class DBManager:
         ''')
 
         # --- 단어장 DB (2026-09-05 추가) ---
+        # item_type: 항목 유형('단어'/'숙어' 등). 1000건 이상 대량 수록을 위해 2026-09-20 (D-3)에 확정.
+        # NOT NULL + UNIQUE(language, word, item_type) 조합으로 같은 단어의 중복 삽입을 차단한다.
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS wordbook (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -126,9 +147,23 @@ class DBManager:
                 meaning TEXT,
                 example TEXT,
                 example_ko TEXT,
-                UNIQUE(language, word, pos)
+                item_type TEXT NOT NULL DEFAULT '단어',
+                UNIQUE(language, word, item_type)
             )
         ''')
+        # 구버전 DB 마이그레이션: SQLite는 기존 테이블의 제약을 변경할 수 없으므로
+        # (1) 컬럼 추가 → (2) 기본값 채우기 → (3) 유니크 인덱스로 중복 차단을 대체한다.
+        cols = [r[1] for r in cursor.execute("PRAGMA table_info(wordbook)").fetchall()]
+        if "item_type" not in cols:
+            cursor.execute("ALTER TABLE wordbook ADD COLUMN item_type TEXT")
+            cursor.execute("UPDATE wordbook SET item_type='단어' WHERE item_type IS NULL")
+            try:
+                cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_wordbook_lang_word_item "
+                               "ON wordbook(language, word, item_type)")
+            except sqlite3.IntegrityError as e:
+                # 이미 중복 단어가 저장돼 있으면 인덱스를 만들 수 없다.
+                # 앱 기동을 막지 않고 경고만 남긴다(중복 정리 후 재실행하면 생성됨).
+                log.warning("wordbook 유니크 인덱스 생성 실패(중복 정리 필요): %s", e)
 
         # --- 생활용어 DB (2026-09-06 추가) ---
         cursor.execute('''
@@ -266,8 +301,14 @@ class DBManager:
         self.conn.commit()
 
     def ensure_schedule_tables(self):
-        """기존 DB 컬럼/테이블 마이그레이션 (스케줄 이미지, 복습, 뉴스 읽음 등)"""
+        """기존 DB 컬럼/테이블 마이그레이션 (누락 테이블 자기치유, 스케줄 이미지, 복습, 뉴스 읽음 등)"""
         cursor = self.conn.cursor()
+
+        # 누락 테이블 자기치유 (2026-09-20 D-2): DB가 재생성되거나 과거 버전의 테이블이 사라져도
+        # 앱이 'no such table'로 죽지 않도록 멱등하게 보정한다. (DDL은 DDL_TASKS 단일 정의)
+        cursor.execute(DDL_TASKS)
+        self.conn.commit()
+
         try:
             cols = [r[1] for r in cursor.execute("PRAGMA table_info(schedules)").fetchall()]
         except sqlite3.Error:
@@ -652,13 +693,17 @@ class DBManager:
             return
         cursor = self.conn.cursor()
         for lang, words in LANG_WORDS.items():
+            # 그 언어에 이미 단어가 한 건이라도 있으면 시드하지 않는다.
+            # (2026-09-20 D-5: item_type 조건으로 판단하면 과거 버전이 넣은 행을 '없음'으로 오판한다)
             cursor.execute("SELECT COUNT(*) FROM wordbook WHERE language=?", (lang,))
             if cursor.fetchone()[0] > 0:
                 continue
             cursor.executemany(
-                "INSERT OR IGNORE INTO wordbook (language, rank, word, pron_en, pron_ko, pos, meaning, example, example_ko) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [(lang,) + w for w in words])
+                "INSERT OR IGNORE INTO wordbook (language, rank, word, pron_en, pron_ko, pos, item_type, meaning, example, example_ko) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                # w = (rank, word, pron_en, pron_ko, pos, meaning, example, example_ko)
+                # 시드 데이터의 item_type은 '단어' 고정 (pos 뒤에 값을 끼워 넣는다)
+                [(lang,) + w[:5] + ("단어",) + w[5:] for w in words])
         self.conn.commit()
 
     def get_word_languages(self):
@@ -668,7 +713,7 @@ class DBManager:
 
     def get_words(self, language=None, keyword=None):
         cursor = self.conn.cursor()
-        sql = ("SELECT id, language, rank, word, pron_en, pron_ko, pos, meaning, example, example_ko "
+        sql = ("SELECT id, language, rank, word, pron_en, pron_ko, pos, item_type, meaning, example, example_ko "
                "FROM wordbook")
         conds, params = [], []
         if language:
@@ -684,17 +729,22 @@ class DBManager:
         cursor.execute(sql, params)
         return [
             {"id": r[0], "language": r[1], "rank": r[2], "word": r[3], "pron_en": r[4],
-             "pron_ko": r[5], "pos": r[6], "meaning": r[7], "example": r[8], "example_ko": r[9]}
+             "pron_ko": r[5], "pos": r[6], "item_type": r[7], "meaning": r[8], "example": r[9], "example_ko": r[10]}
             for r in cursor.fetchall()
         ]
 
-    def add_word(self, language, rank, word, pron_en, pron_ko, pos, meaning, example, example_ko):
+    def add_word(self, language, rank, word, pron_en, pron_ko, pos, meaning, example, example_ko,
+                 item_type="단어"):
+        """단어 1건 추가. 같은 (language, word, item_type)이 이미 있으면 False(중복 차단).
+
+        item_type: '단어'(기본) 또는 '숙어' 등 — 2026-09-20 (D-3/P1-1) 단일 API로 통합했다.
+        """
         try:
             cursor = self.conn.cursor()
             cursor.execute(
-                "INSERT INTO wordbook (language, rank, word, pron_en, pron_ko, pos, meaning, example, example_ko) "
-                "VALUES (?,?,?,?,?,?,?,?,?)",
-                (language, rank, word, pron_en, pron_ko, pos, meaning, example, example_ko))
+                "INSERT INTO wordbook (language, rank, word, pron_en, pron_ko, pos, item_type, meaning, example, example_ko) "
+                "VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (language, rank, word, pron_en, pron_ko, pos, item_type, meaning, example, example_ko))
             self.conn.commit()
             return True
         except sqlite3.IntegrityError:
