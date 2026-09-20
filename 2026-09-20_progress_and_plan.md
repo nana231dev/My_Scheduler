@@ -664,13 +664,13 @@ git status --short ; git log --all --oneline -- "*.db"
 | **Day 2**<br>09-20(일)<br>✅ **완료** | 안전장치<br>(P0-1/P0-4/P0-6/P1-9) | ①시작 시 자동 백업(일 1회, 7개 회전)+설정 화면 "마지막 백업" 라벨·경고 ②`switch_view` 예외 격리(오류 라벨+`log.exception`) ③로그 인증키 마스킹(`SecretMaskingFilter` — 모든 핸들러) ④`user_version=1`+`integrity_check` 실패 시 읽기 전용 게이트 | 실측: `backup/scheduler_20260920.db` 자동 생성, `user_version=1`, app.log에 `serviceKey=***`(`61 tests OK`) |
 | **Day 3**<br>09-20(일)<br>✅ **완료** | 스키마 확정<br>(P1-1/P1-2) | ①기념일 시드 정정(**11건**: 공휴일 10+독도의 날 1) + `migrate_to_v2` 재시드 ②`wordbook` 340행 `item_type` 정규화(`동사` 338+`명사` 2 → `'단어'`, pos 보존) ③`SCHEMA_VERSION=2`+버전 스탬프 ④회귀 테스트 7건 | **`Ran 68 tests — OK`**(61→68), `py_compile 25/25`, 실 DB: 기념일 11건·공휴일 10건·`user_version=2`·멱등 확인 |
 | **Day 4**<br>09-20(일)<br>✅ **완료** | 재입력 도구<br>(P0-5 연계) | ①`docs/schedule_template.xlsx`(생성기 `Temp/make_schedule_template.py`, gitignore라 템플릿은 docs에 보관) ②고아 이미지 2건 존재 확인(각 213,809B, 템플릿에 경로 기입) ③임시 DB 왕복 검증(가져오기 2건→내보내기 이미지 복원) ④D-Day/증권/투자일기 CRUD 검증 ⑤`saved_markets.symbol` UNIQUE 보장(중복 저장 차단) | **`Ran 71 tests — OK`**(68→71), `py_compile 25/25`, `DAY4_CHECK_OK` |
-| **Day 5**<br>09-24(목) | 학습<br>(P1-3/P1-4) | ①진도율 위젯 ②`study_progress` 실사용 경로 ③`study_subject_data` 연결/제거 결정 | 진도 입력→재시작 후 유지, 진도율 % = DB 집계 |
+| **Day 5**<br>09-20(일)<br>✅ **완료** | 학습<br>(P1-3/P1-4) | ①`get_study_progress_summary`+`get_study_progress_by_category` 신설 ②공부 탭 상단 **진도율 위젯**(날짜별 완료/전체·%·과목별, 추가/토글/삭제 시 갱신) ③`study_subject_data` **제거 보류**(Day6 이후 과학 탭 연결 또는 테이블 제거, NOTE 명시) ④회귀 테스트 4건 | **`Ran 75 tests — OK`**(71→75), `py_compile 25/25`, `DAY5_CHECK_OK` |
 | **Day 6**<br>09-25(금) | 뉴스 + 단어<br>(P1-5/P1-6/P1-7) | ①뉴스 소스 4건 교정 ②성공/실패 집계 ③완성 언어 CSV만 임포트 ④(가능 시) 가계부 카테고리·예산 | 교육 카테고리 정합, 임포트 후 단어 중복 0, 미완 언어 제외 확인 |
 | **Day 7**<br>09-26(토) | 회귀·릴리스<br>(P1-8/G-1/G-2) | ①`unittest`+스모크+`probe_state`+`moji_probe` ②수동 시나리오 6종 ③문서 갱신 ④`git tag v1.1` | `Temp/regression_0926.json`, 태그 푸시 완료 |
 
 > Day 6까지 P1을 다 못 끝내면 **가계부(P1-7)와 1000단어 완성(P1-5 확장)은 다음 사이클로 넘긴다.** 릴리스(Day 7)는 미루지 않는다.
 
-> **Day 1~4 실측 결과(2026-09-20)**: 테스트 48 → **71건 전부 OK**, `py_compile 25/25 OK`, 실 DB에 `tasks` 6컬럼 + 기념일 정정본 11건(공휴일 10건) + wordbook 340행 `item_type='단어'` + `user_version=2`, `backup/`에 자동 백업(`scheduler_20260920.db`)+베이스라인·Day3 사전 백업 동결본, app.log 마스킹 실기록 확인. Day 4는 **실 DB에 손대지 않음**(재입력은 사용자가 앱에서 수행). 다음 착수는 **Day 5(학습)**.
+> **Day 1~5 실측 결과(2026-09-20)**: 테스트 48 → **75건 전부 OK**, `py_compile 25/25 OK`, 실 DB에 `tasks` 6컬럼 + 기념일 정정본 11건(공휴일 10건) + wordbook 340행 `item_type='단어'` + `user_version=2`, `backup/`에 자동 백업(`scheduler_20260920.db`)+베이스라인·Day3 사전 백업 동결본, app.log 마스킹 실기록 확인. Day 4~5는 **실 DB에 손대지 않음**(임시 DB 검증만). 다음 착수는 **Day 6(뉴스 + 단어)**.
 
 ### 12-4. 데이터 재입력 로드맵 (과거 수치를 목표로 삼지 않는다)
 

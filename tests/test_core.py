@@ -420,6 +420,67 @@ class TestSavedStocks(unittest.TestCase):
         self.assertEqual(self.db.get_ddays(), [])
 
 
+# ── Day5 학습 진도 집계 (2026-09-20 P1-3) ─────────────────────
+class TestStudyProgressSummary(unittest.TestCase):
+    """진도율 위젯의 DB 집계가 정확하고, 입력→재조회 후 유지되는지 검증한다."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.db = DBManager(db_name=str(Path(self._tmp.name) / "study.db"))
+        self.db.add_category("검증수학")
+        self.db.add_category("검증영어")
+        self.cat_math = self.db.get_category_id("검증수학")
+        self.cat_eng = self.db.get_category_id("검증영어")
+
+    def tearDown(self):
+        try:
+            self.db.conn.close()
+        except Exception:
+            pass
+        self._tmp.cleanup()
+
+    def test_empty_summary_is_zero(self):
+        self.assertEqual(self.db.get_study_progress_summary("2099-01-01"),
+                         {"total": 0, "done": 0, "rate": 0})
+        self.assertEqual(self.db.get_study_progress_by_category("2099-01-01"), [])
+
+    def test_record_toggle_persist(self):
+        """진도 입력 → 토글 → 재조회 후 유지 (Day5 DoD)."""
+        self.db.add_study_progress("2099-01-02", self.cat_math, "1과 복습")
+        rows = self.db.get_study_progress("2099-01-02")
+        self.assertEqual(len(rows), 1)
+        self.assertFalse(rows[0]["done"])
+        self.db.toggle_study_progress(rows[0]["id"])
+        rows2 = self.db.get_study_progress("2099-01-02")
+        self.assertTrue(rows2[0]["done"])
+        # 재연결(재시작 시뮬레이션) 후에도 유지
+        self.db.conn.commit()
+        rows3 = self.db.get_study_progress("2099-01-02")
+        self.assertTrue(rows3[0]["done"])
+
+    def test_summary_rate_matches_db(self):
+        """진도율 % = DB 집계 (위젯 표시값과 동일한 계산)."""
+        self.db.add_study_progress("2099-01-03", self.cat_math, "A")
+        self.db.add_study_progress("2099-01-03", self.cat_eng, "B")
+        self.db.add_study_progress("2099-01-03", self.cat_eng, "C")
+        first = self.db.get_study_progress("2099-01-03")[0]
+        self.db.toggle_study_progress(first["id"])
+        total = self.db.get_study_progress_summary("2099-01-03")
+        self.assertEqual(total, {"total": 3, "done": 1, "rate": 33})
+        by_cat = {r["cat_name"]: r for r in self.db.get_study_progress_by_category("2099-01-03")}
+        self.assertEqual(by_cat["검증수학"]["done"], 1)
+        self.assertEqual(by_cat["검증수학"]["rate"], 100)
+        self.assertEqual(by_cat["검증영어"]["total"], 2)
+        self.assertEqual(by_cat["검증영어"]["done"], 0)
+
+    def test_deleted_category_grouped_as_uncategorized(self):
+        self.db.add_study_progress("2099-01-04", self.cat_math, "D")
+        self.db.delete_category(self.cat_math)
+        by_cat = self.db.get_study_progress_by_category("2099-01-04")
+        self.assertEqual(len(by_cat), 1)
+        self.assertEqual(by_cat[0]["cat_name"], "미분류")
+
+
 # ── 증권 유틸/검색 (2026-09-14 확장) ─────────────────────────
 from core.market_fetcher import (  # noqa: E402
     MarketFetcher,

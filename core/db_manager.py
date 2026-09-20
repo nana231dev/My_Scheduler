@@ -819,6 +819,52 @@ class DBManager:
         cursor.execute("DELETE FROM study_progress WHERE id=?", (progress_id,))
         self.conn.commit()
 
+    def get_study_progress_summary(self, date_str=None):
+        """진도 집계 (2026-09-20 Day5 P1-3: 진도율 위젯용).
+
+        date_str이 주어지면 해당 날짜, 없으면 전체 기간의
+        {total, done, rate(0~100 정수, total 0이면 0)}를 반환한다.
+        """
+        cursor = self.conn.cursor()
+        if date_str:
+            row = cursor.execute(
+                "SELECT COUNT(*), COALESCE(SUM(done),0) FROM study_progress WHERE date=?",
+                (date_str,)).fetchone()
+        else:
+            row = cursor.execute(
+                "SELECT COUNT(*), COALESCE(SUM(done),0) FROM study_progress").fetchone()
+        total, done = int(row[0] or 0), int(row[1] or 0)
+        return {"total": total, "done": done,
+                "rate": round(done * 100 / total) if total else 0}
+
+    def get_study_progress_by_category(self, date_str=None):
+        """과목별 진도 집계 (2026-09-20 Day5 P1-3: 진도율 위젯용).
+
+        [{cat_id, cat_name, total, done, rate}] — 과목 삭제 후 cat_id가
+        끊긴 행은 '미분류'로 묶는다. date_str이 없으면 전체 기간.
+        """
+        cursor = self.conn.cursor()
+        if date_str:
+            rows = cursor.execute(
+                """SELECT p.cat_id, c.name, COUNT(*), COALESCE(SUM(p.done),0)
+                   FROM study_progress p
+                   LEFT JOIN categories c ON p.cat_id = c.id
+                   WHERE p.date=? GROUP BY p.cat_id, c.name ORDER BY c.name""",
+                (date_str,)).fetchall()
+        else:
+            rows = cursor.execute(
+                """SELECT p.cat_id, c.name, COUNT(*), COALESCE(SUM(p.done),0)
+                   FROM study_progress p
+                   LEFT JOIN categories c ON p.cat_id = c.id
+                   GROUP BY p.cat_id, c.name ORDER BY c.name""").fetchall()
+        out = []
+        for cat_id, name, total, done in rows:
+            total, done = int(total), int(done or 0)
+            out.append({"cat_id": cat_id, "cat_name": name or "미분류",
+                        "total": total, "done": done,
+                        "rate": round(done * 100 / total) if total else 0})
+        return out
+
     # --- 목록??DB (2026-09-05) ---
     def init_default_words(self):
         """언어별 기본 목록이 없으면 word_data.py에서 자동 삽입(단어장 300, 일본어/중국어 각 20)"""
@@ -1197,6 +1243,10 @@ class DBManager:
         return [{"category": r[0], "amount": r[1]} for r in cursor.fetchall()]
 
     # --- 과목별 데이터 조회 (2026-09-12 추가) ---
+    # NOTE(2026-09-20 Day5 P1-4 결정: 제거 보류): get/set/search_subject_data는
+    # 현재 앱 호출 0건이나, 과학/IT/사회탐구 탭의 메모 저장소로 설계된 API다.
+    # Day6 이후 과학 탭 메모 UI와 연결하거나, 미연결 시 테이블째 제거한다.
+    # 함부로 호출부를 만들지 말고 결정 후 처리할 것.
     def get_subject_data(self, subject, keyword=None):
         """과목별 데이터 메모 조회"""
         cursor = self.conn.cursor()

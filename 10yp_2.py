@@ -2365,6 +2365,18 @@ class SchedulerApp(ttk.Window):
         ttk.Label(self.content_area, text="과목별 자료와 메모를 탭으로 정리한 학습 공간", bootstyle="secondary",
                   font=("Malgun Gothic", 10)).pack(anchor="w", pady=(0, 12))
 
+        # ── 진도율 위젯 (2026-09-20 Day5 P1-3) ──
+        # study_progress 집계(전체 + 과목별)를 한 줄로 보여준다.
+        # refresh_study_progress 계열 동작이 끝날 때마다 갱신된다.
+        self.study_rate_var = tk.StringVar(value="오늘 진도: 기록 없음")
+        rate_bar = ttk.Frame(self.content_area)
+        rate_bar.pack(fill=X, pady=(0, 8))
+        ttk.Label(rate_bar, textvariable=self.study_rate_var,
+                  font=("Malgun Gothic", 11, "bold"), bootstyle="info").pack(side=LEFT)
+        ttk.Button(rate_bar, text="🔄", width=3, bootstyle="secondary-outline",
+                   command=self.refresh_study_rate).pack(side=RIGHT)
+        self.refresh_study_rate()
+
         self.study_notebook = ttk.Notebook(self.content_area)
         self.study_notebook.pack(fill=BOTH, expand=YES, pady=(0, 10))
 
@@ -3047,6 +3059,31 @@ class SchedulerApp(ttk.Window):
             done_txt = "✅" if p["done"] else "⬜"
             self.tree_progress.insert("", "end", iid=str(p["id"]),
                                       values=(done_txt, p["cat_name"] or "?", p["task"]))
+        self.refresh_study_rate(date_str)
+
+    def refresh_study_rate(self, date_str=None):
+        """진도율 위젯 갱신 (2026-09-20 Day5 P1-3).
+
+        date_str이 없으면 진도 탭 입력값 → 비어 있으면 오늘 날짜를 사용한다.
+        표시 형식: '오늘 진도: 2/3 (67%) · 수학 1/1 · 영어 1/2'
+        DB 집계(get_study_progress_summary/by_category)와 같은 값을 보여준다.
+        """
+        try:
+            if not date_str and hasattr(self, "entry_prog_date"):
+                date_str = self.entry_prog_date.get().strip()
+            if not date_str:
+                date_str = datetime.now().strftime("%Y-%m-%d")
+            total = self.db.get_study_progress_summary(date_str)
+            if total["total"] == 0:
+                self.study_rate_var.set(f"{date_str} 진도: 기록 없음")
+                return
+            parts = [f"{r['cat_name']} {r['done']}/{r['total']}"
+                     for r in self.db.get_study_progress_by_category(date_str)]
+            detail = (" · " + " · ".join(parts)) if parts else ""
+            self.study_rate_var.set(
+                f"{date_str} 진도: {total['done']}/{total['total']} ({total['rate']}%){detail}")
+        except (AttributeError, sqlite3.Error, ValueError, TypeError, tk.TclError):
+            pass  # 위젯은 보조 표시 — 실패해도 진도 기록을 막지 않는다
 
     def add_study_progress_ui(self):
         cat_id = self._current_cat_id()
@@ -3066,6 +3103,7 @@ class SchedulerApp(ttk.Window):
         self.db.add_study_progress(date_str, cat_id, task)
         self.entry_prog_task.delete(0, "end"); self.entry_prog_task.insert(0, "")
         self.refresh_study_progress()
+        self.refresh_study_rate(date_str)
 
     def toggle_study_progress_ui(self):
         sel = self.tree_progress.selection()
@@ -3073,6 +3111,7 @@ class SchedulerApp(ttk.Window):
             return
         self.db.toggle_study_progress(int(sel[0]))
         self.refresh_study_progress()
+        self.refresh_study_rate()
 
     def delete_study_progress_ui(self):
         sel = self.tree_progress.selection()
@@ -3081,6 +3120,7 @@ class SchedulerApp(ttk.Window):
         for item in sel:
             self.db.delete_study_progress(int(item))
         self.refresh_study_progress()
+        self.refresh_study_rate()
 
     # 뷰: 뉴스 & 정보
     # -------------------------------------------------------------
